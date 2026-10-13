@@ -26,11 +26,16 @@ import {
   Gauge,
   Layers,
   ChevronDown,
+  Key,
+  Pause,
+  RefreshCw,
+  Info,
 } from 'lucide-react';
 import { CustomVoiceProfile, GenerationSegment, Voice } from '../types.ts';
 import { VOICE_PRESETS, SAMPLE_SCRIPTS } from '../constants/presets.ts';
 import { AdvancedAudioPlayer } from './AdvancedAudioPlayer.tsx';
 import { concatenateAudioSegments, generateSingleSegment, splitScriptSegments } from '../services/api.ts';
+import { apiKeyManager } from '../services/apiKeyManager.ts';
 
 interface TextToSpeechWorkspaceProps {
   voices: Voice[];
@@ -44,6 +49,8 @@ interface TextToSpeechWorkspaceProps {
     duration: number;
   }) => void;
   onNavigateToMyVoice: () => void;
+  onNavigateToApiKey?: () => void;
+  onNavigateToQuotas?: () => void;
 }
 
 export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
@@ -53,6 +60,8 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
   initialVoiceId = 'Kore',
   onGenerationComplete,
   onNavigateToMyVoice,
+  onNavigateToApiKey,
+  onNavigateToQuotas,
 }) => {
   // Script state
   const [scriptText, setScriptText] = useState(() => {
@@ -208,17 +217,37 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
     }
   };
 
-  // Main Generation Handler
-  const handleGenerate = async () => {
+  // Advanced Asynchronous Queue & Generation State
+  const [segments, setSegments] = useState<GenerationSegment[]>([]);
+  const [interSegmentDelayMs, setInterSegmentDelayMs] = useState<number>(2000);
+  const [retryInfo, setRetryInfo] = useState<{ attempt: number; maxAttempts: number; countdown: number } | null>(null);
+  const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState<string>('');
+  const [isPaused, setIsPaused] = useState(false);
+  const abortRequestedRef = useRef(false);
+
+  // Stop / Cancel Generation Handler
+  const handleCancelGeneration = () => {
+    abortRequestedRef.current = true;
+    setIsGenerating(false);
+    setIsPaused(true);
+    setRetryInfo(null);
+    setGenerationStep('Génération mise en pause. Vos segments déjà synthétisés sont conservés.');
+  };
+
+  // Main Generation Handler supporting Resume and controlled asynchronous queue
+  const handleGenerate = async (isResume = false) => {
     if (!scriptText.trim()) {
       setErrorNotice('Veuillez renseigner un texte à synthétiser.');
       return;
     }
 
+    if (isGenerating) return; // Prevent duplicate generation jobs
+
+    abortRequestedRef.current = false;
     setIsGenerating(true);
+    setIsPaused(false);
     setErrorNotice(null);
-    setGenerationStep('Découpage du script en segments continus...');
-    setGenerationProgress(5);
+    setRetryInfo(null);
 
     try {
       const isCustomVoice = voiceCategory === 'custom';
@@ -230,78 +259,189 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
         ? `${customProfile.stylePrompt}. ${customStyle}`.trim()
         : customStyle;
 
-      // 1. Split script into manageable segments (honoring paragraphs and sentences)
-      let segmentsText: string[] = [];
-      try {
-        const splitRes = await splitScriptSegments(scriptText, 80);
-        segmentsText = splitRes.segments;
-      } catch {
-        segmentsText = scriptText
-          .split(/\n\s*\n/)
-          .map((p) => p.trim())
-          .filter(Boolean);
-        if (segmentsText.length === 0) segmentsText = [scriptText.trim()];
+      // 1. Prepare segments queue
+      let currentSegments = [...segments];
+
+      if (!isResume || currentSegments.length === 0) {
+        setGenerationStep('Découpage intelligent du script...');
+        setGenerationProgress(3);
+
+        let segmentsText: string[] = [];
+        try {
+          const splitRes = await splitScriptSegments(scriptText, 75);
+          segmentsText = splitRes.segments;
+        } catch {
+          segmentsText = scriptText
+            .split(/\n\s*\n/)
+            .map((p) => p.trim())
+            .filter(Boolean);
+          if (segmentsText.length === 0) segmentsText = [scriptText.trim()];
+        }
+
+        currentSegments = segmentsText.map((text, idx) => ({
+          index: idx + 1,
+          text,
+          status: 'pending',
+          retries: 0,
+        }));
+        setSegments(currentSegments);
       }
 
-      const totalSegments = segmentsText.length;
-      setGenerationStep(`Préparation de la synthèse (${totalSegments} segment${totalSegments > 1 ? 's' : ''})...`);
-      setGenerationProgress(10);
+      const totalSegments = currentSegments.length;
+      const startIndex = isResume
+        ? currentSegments.findIndex((s) => s.status !== 'completed')
+        : 0;
 
-      const completedSegs: GenerationSegment[] = [];
-      const segmentAudioB64s: string[] = [];
+      if (startIndex === -1 && currentSegments.length > 0) {
+        // All segments already completed!
+        setGenerationStep('Tous les segments sont déjà prêts. Assemblage...');
+      }
 
-      // 2. Generate each segment progressively
-      for (let i = 0; i < totalSegments; i++) {
-        const segText = segmentsText[i];
-        setGenerationStep(`Synthèse audio : segment ${i + 1} sur ${totalSegments}...`);
-        const currentProg = Math.round(10 + (i / totalSegments) * 75);
-        setGenerationProgress(currentProg);
+      // 2. Controlled asynchronous queue (concurrency = 1)
+      for (let i = Math.max(0, startIndex); i < totalSegments; i++) {
+        // Check for cancellation
+        if (abortRequestedRef.current) {
+          setIsGenerating(false);
+          setIsPaused(true);
+          setGenerationStep(`Génération suspendue au segment ${i + 1}/${totalSegments}. Vos segments sont sauvegardés.`);
+          return;
+        }
 
-        let segResult;
-        let attempts = 0;
-        let segSuccess = false;
-        let lastSegErr: any = null;
+        const currentSeg = currentSegments[i];
+        if (currentSeg.status === 'completed' && currentSeg.audioBase64) {
+          continue; // Keep already completed segment
+        }
 
-        while (attempts < 2 && !segSuccess) {
-          attempts++;
+        // Update progress UI
+        const progressPct = Math.round(((i) / totalSegments) * 85) + 5;
+        setGenerationProgress(progressPct);
+        setGenerationStep(`Synthèse du segment ${i + 1} sur ${totalSegments}...`);
+
+        const remainingCount = totalSegments - i;
+        const estSecsLeft = Math.round((remainingCount * (interSegmentDelayMs / 1000 + 3)));
+        setEstimatedTimeRemaining(formatEstimatedTime(estSecsLeft));
+
+        // Mark segment as generating
+        currentSegments[i] = { ...currentSegments[i], status: 'generating', error: undefined };
+        setSegments([...currentSegments]);
+
+        // Exponential backoff retry loop (max 5 attempts for transient errors)
+        const maxAttempts = 5;
+        let attempt = 0;
+        let segmentDone = false;
+        let lastError: any = null;
+
+        while (attempt < maxAttempts && !segmentDone) {
+          if (abortRequestedRef.current) break;
+          attempt++;
+
           try {
-            segResult = await generateSingleSegment({
-              text: segText,
+            const segResult = await generateSingleSegment({
+              text: currentSeg.text,
               voiceName: activeVoice,
               style: enrichedStyle,
               speed: speechSpeed,
               pitch: voicePitch,
             });
-            segSuccess = true;
+
+            if (!segResult.audioBase64) {
+              throw new Error('Aucune trame audio reçue du moteur vocal.');
+            }
+
+            // Success on this segment
+            currentSegments[i] = {
+              ...currentSegments[i],
+              status: 'completed',
+              audioBase64: segResult.audioBase64,
+              duration: segResult.duration,
+              byteSize: segResult.byteSize,
+              error: undefined,
+              retries: attempt - 1,
+            };
+            setSegments([...currentSegments]);
+            segmentDone = true;
+            setRetryInfo(null);
           } catch (err: any) {
-            lastSegErr = err;
-            if (attempts < 2) {
-              await new Promise((r) => setTimeout(r, 800));
+            lastError = err;
+            const errMsg = err?.message || String(err);
+
+            // Permanent errors: do not retry
+            const isInvalidKey = errMsg.includes('clé API') || errMsg.includes('API_KEY_INVALID') || errMsg.includes('401') || errMsg.includes('403');
+            const isQuotaExhausted = errMsg.includes('Quota quotidien') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('10 requêtes par jour');
+
+            if (isInvalidKey || isQuotaExhausted) {
+              currentSegments[i] = {
+                ...currentSegments[i],
+                status: 'failed',
+                error: errMsg,
+              };
+              setSegments([...currentSegments]);
+              setIsGenerating(false);
+              setIsPaused(true);
+              setRetryInfo(null);
+              setErrorNotice(errMsg);
+              return;
+            }
+
+            // Transient error (503 high demand or 429 rate limit): apply backoff with jitter
+            if (attempt < maxAttempts && !abortRequestedRef.current) {
+              // Exponential backoff base with random jitter (200ms - 800ms)
+              const baseBackoff = Math.round(1500 * Math.pow(1.6, attempt - 1));
+              const jitter = Math.floor(Math.random() * 600);
+              const waitDuration = baseBackoff + jitter;
+
+              // Live countdown in UI
+              const countdownSecs = Math.ceil(waitDuration / 1000);
+              for (let c = countdownSecs; c > 0; c--) {
+                if (abortRequestedRef.current) break;
+                setRetryInfo({ attempt: attempt + 1, maxAttempts, countdown: c });
+                setGenerationStep(`Forte demande serveur (503/429). Nouvel essai dans ${c}s (tentative ${attempt + 1}/${maxAttempts})...`);
+                await new Promise((r) => setTimeout(r, 1000));
+              }
+              setRetryInfo(null);
             }
           }
         }
 
-        if (!segSuccess || !segResult?.audioBase64) {
-          throw new Error(`Échec de synthèse sur le segment ${i + 1}/${totalSegments} : ${lastSegErr?.message || 'Erreur de génération'}`);
+        if (abortRequestedRef.current) {
+          setIsGenerating(false);
+          setIsPaused(true);
+          return;
         }
 
-        segmentAudioB64s.push(segResult.audioBase64);
-        completedSegs.push({
-          index: i + 1,
-          text: segText,
-          audioBase64: segResult.audioBase64,
-          duration: segResult.duration,
-          byteSize: segResult.byteSize,
-          status: 'completed',
-        });
+        if (!segmentDone) {
+          currentSegments[i] = {
+            ...currentSegments[i],
+            status: 'failed',
+            error: lastError?.message || 'Échec de génération du segment après 5 tentatives.',
+          };
+          setSegments([...currentSegments]);
+          setIsGenerating(false);
+          setIsPaused(true);
+          throw new Error(`Échec sur le segment ${i + 1}/${totalSegments} : ${lastError?.message || 'Erreur inconnue'}`);
+        }
+
+        // Safety inter-segment delay (configurable)
+        if (i < totalSegments - 1 && interSegmentDelayMs > 0 && !abortRequestedRef.current) {
+          setGenerationStep(`Pause de sécurité anti-blocage (${(interSegmentDelayMs / 1000).toFixed(1)}s)...`);
+          await new Promise((r) => setTimeout(r, interSegmentDelayMs));
+        }
       }
 
-      // 3. Assemble and concatenate all segments into seamless master audio
-      setGenerationStep('Assemblage et égalisation du fichier master...');
-      setGenerationProgress(90);
+      // 3. Assemble and concatenate all completed segments into master WAV
+      setGenerationStep('Assemblage et égalisation du fichier master WAV HD...');
+      setGenerationProgress(92);
+
+      const allB64s = currentSegments
+        .filter((s) => s.status === 'completed' && Boolean(s.audioBase64))
+        .map((s) => s.audioBase64 as string);
+
+      if (allB64s.length !== totalSegments) {
+        throw new Error(`Impossible d'assembler : seulement ${allB64s.length}/${totalSegments} segments sont terminés.`);
+      }
 
       const concatRes = await concatenateAudioSegments({
-        segmentBase64s: segmentAudioB64s,
+        segmentBase64s: allB64s,
         projectName,
         text: scriptText,
         voiceName: activeVoice,
@@ -314,7 +454,7 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
       if (concatRes.success) {
         setGeneratedWav(concatRes.wavBase64);
         setGeneratedDuration(concatRes.duration);
-        setGeneratedSegments(completedSegs);
+        setGeneratedSegments(currentSegments);
 
         onGenerationComplete({
           creationId: concatRes.creationId,
@@ -325,12 +465,16 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
 
         setGenerationProgress(100);
         setGenerationStep('Génération terminée avec succès !');
+        setIsPaused(false);
       }
     } catch (err: any) {
       console.error('Generation error:', err);
-      setErrorNotice(err.message || 'Une erreur est survenue pendant la génération vocale.');
+      let msg = err.message || 'Une erreur est survenue pendant la génération vocale.';
+      setErrorNotice(msg);
+      setIsPaused(true);
     } finally {
       setIsGenerating(false);
+      setRetryInfo(null);
     }
   };
 
@@ -789,70 +933,224 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
         </div>
       </div>
 
-      {/* SECTION 5: Generation Action Bar */}
+      {/* SECTION 5: Generation Action Bar & Controlled Asynchronous Queue */}
       <div className="space-y-4">
+        {/* Personal API Key Missing Advisory Banner */}
+        {!apiKeyManager.hasKey() && (
+          <div className="p-4 rounded-2xl bg-purple-950/40 border border-purple-500/30 text-xs text-purple-200 flex flex-wrap items-center justify-between gap-3 shadow-lg">
+            <div className="flex items-center gap-2.5">
+              <Key className="w-4 h-4 text-purple-400 shrink-0" />
+              <span>
+                <strong>Clé API Google non enregistrée :</strong> Il est fortement conseillé de renseigner votre clé personnelle pour éviter les limitations de requêtes partagées.
+              </span>
+            </div>
+            {onNavigateToApiKey && (
+              <button
+                type="button"
+                onClick={onNavigateToApiKey}
+                className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition-all shrink-0 cursor-pointer"
+              >
+                Configurer ma clé →
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Safety Delay & Rate Limit Guard Setting */}
+        <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-2xl bg-[#0b0d18] border border-white/5 text-xs text-gray-400">
+          <div className="flex items-center gap-2">
+            <Clock className="w-4 h-4 text-purple-400" />
+            <span className="text-gray-300 font-medium">Délai de sécurité anti-blocage entre segments :</span>
+            <span className="font-mono text-purple-300 font-bold">{(interSegmentDelayMs / 1000).toFixed(1)}s</span>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            {[1000, 2000, 3000, 5000].map((ms) => (
+              <button
+                key={ms}
+                type="button"
+                onClick={() => setInterSegmentDelayMs(ms)}
+                disabled={isGenerating}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all ${
+                  interSegmentDelayMs === ms
+                    ? 'bg-purple-600 text-white shadow-sm'
+                    : 'bg-white/5 text-gray-400 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                {ms / 1000}s
+              </button>
+            ))}
+          </div>
+        </div>
+
         {errorNotice && (
           <div className="p-4 rounded-2xl bg-red-950/40 border border-red-500/30 text-xs sm:text-sm text-red-200 flex items-start gap-3">
             <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
             <div className="flex-1">
-              <strong className="block mb-0.5 font-semibold">Erreur de génération :</strong>
-              <p>{errorNotice}</p>
-              <p className="text-gray-400 text-xs mt-1">
-                Votre script n'a pas été perdu. Vous pouvez modifier vos réglages et réessayer immédiatement.
-              </p>
+              <strong className="block mb-0.5 font-semibold">Incident de synthèse :</strong>
+              <p className="leading-relaxed">{errorNotice}</p>
+              {segments.some((s) => s.status === 'completed') && (
+                <p className="text-emerald-300 text-xs mt-2 font-medium">
+                  ✓ Vos {segments.filter((s) => s.status === 'completed').length} segment(s) déjà réussis sont conservés en mémoire. Vous pouvez reprendre la génération sans tout recommencer.
+                </p>
+              )}
+            </div>
+            {onNavigateToQuotas && (errorNotice.includes('Quota') || errorNotice.includes('429')) && (
+              <button
+                onClick={onNavigateToQuotas}
+                className="px-3 py-1.5 rounded-lg bg-red-800/80 hover:bg-red-700 text-white font-semibold text-xs shrink-0 cursor-pointer"
+              >
+                Voir mes quotas
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Retry Banner with Countdown on 503 / 429 */}
+        {retryInfo && (
+          <div className="p-3.5 rounded-2xl bg-amber-950/40 border border-amber-500/40 text-amber-200 text-xs flex items-center justify-between gap-3 animate-pulse">
+            <div className="flex items-center gap-2">
+              <RefreshCw className="w-4 h-4 text-amber-400 animate-spin" />
+              <span>
+                Forte demande Google AI Studio détectée. <strong>Nouvelle tentative automatique dans {retryInfo.countdown}s</strong> (Tentative {retryInfo.attempt}/{retryInfo.maxAttempts})
+              </span>
             </div>
             <button
-              onClick={handleGenerate}
-              className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-semibold text-xs shrink-0"
+              onClick={handleCancelGeneration}
+              className="text-xs text-amber-300 hover:text-white underline cursor-pointer"
             >
-              Réessayer
+              Annuler
             </button>
           </div>
         )}
 
-        {/* Big Generate Button */}
-        <div className="flex items-center justify-between gap-4 p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-purple-950/50 via-[#101322] to-indigo-950/50 border border-purple-500/30 shadow-2xl">
+        {/* Big Action Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-4 p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-purple-950/50 via-[#101322] to-indigo-950/50 border border-purple-500/30 shadow-2xl">
           <div className="hidden sm:block">
             <p className="text-xs text-gray-400">
               Voix : <strong className="text-white">{selectedVoiceId}</strong> • Débit :{' '}
               <strong className="text-white">{speechSpeed}x</strong>
+              {segments.length > 0 && (
+                <span className="ml-2 text-purple-300">
+                  • {segments.filter((s) => s.status === 'completed').length}/{segments.length} segments prêts
+                </span>
+              )}
             </p>
             <p className="text-[11px] text-purple-300">
-              Rendu master WAV HD & encodage MP3 automatique
+              Rendu master WAV HD 24kHz avec concaténation sans rupture
             </p>
           </div>
 
-          <button
-            onClick={handleGenerate}
-            disabled={isGenerating || !scriptText.trim()}
-            className="w-full sm:w-auto flex items-center justify-center gap-3 px-8 py-4 rounded-2xl bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-400 hover:from-purple-500 hover:to-cyan-300 text-white text-base font-extrabold shadow-2xl shadow-purple-900/50 transition-all transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-          >
+          <div className="flex items-center gap-3 w-full sm:w-auto">
+            {/* If currently generating: Show Cancel / Pause Button */}
             {isGenerating ? (
+              <button
+                type="button"
+                onClick={handleCancelGeneration}
+                className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-3.5 rounded-2xl bg-red-950/50 hover:bg-red-900/60 border border-red-500/40 text-red-200 text-sm font-bold transition-all cursor-pointer shadow-lg"
+              >
+                <Pause className="w-4 h-4 text-red-400" />
+                <span>Mettre en pause / Annuler</span>
+              </button>
+            ) : isPaused && segments.some((s) => s.status !== 'completed') ? (
+              /* If paused/interrupted with unfinished segments: Show Resume Button */
               <>
-                <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                <span>Génération audio en cours...</span>
+                <button
+                  type="button"
+                  onClick={() => handleGenerate(true)}
+                  disabled={!scriptText.trim()}
+                  className="flex-1 sm:flex-none flex items-center justify-center gap-2.5 px-7 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-sm font-bold shadow-xl shadow-emerald-950/40 transition-all cursor-pointer"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  <span>
+                    Reprendre la synthèse ({segments.filter((s) => s.status !== 'completed').length} segments restants)
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSegments([]);
+                    handleGenerate(false);
+                  }}
+                  className="px-4 py-3.5 rounded-2xl bg-white/5 hover:bg-white/10 text-gray-400 text-xs font-semibold cursor-pointer"
+                  title="Recommencer tout le texte depuis le début"
+                >
+                  Recommencer à zéro
+                </button>
               </>
             ) : (
-              <>
+              /* Standard Full Generate Button */
+              <button
+                type="button"
+                onClick={() => handleGenerate(false)}
+                disabled={isGenerating || !scriptText.trim()}
+                className="w-full sm:w-auto flex items-center justify-center gap-3 px-8 py-4 rounded-2xl bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-400 hover:from-purple-500 hover:to-cyan-300 text-white text-base font-extrabold shadow-2xl shadow-purple-900/50 transition-all transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              >
                 <Volume2 className="w-5 h-5" />
                 <span>Générer la Voix Audio (~{formatEstimatedTime(estimatedSeconds)})</span>
-              </>
+              </button>
             )}
-          </button>
+          </div>
         </div>
 
-        {/* Progress Bar when Generating */}
-        {isGenerating && (
-          <div className="p-4 rounded-2xl bg-[#0e111d] border border-purple-500/30 space-y-2">
-            <div className="flex justify-between text-xs text-gray-300">
-              <span>{generationStep}</span>
-              <span className="font-mono text-purple-400">{generationProgress}%</span>
+        {/* Live Segment Progress & Pipeline Visualizer */}
+        {(isGenerating || segments.length > 0) && (
+          <div className="p-4 sm:p-5 rounded-2xl bg-[#0e111d] border border-purple-500/30 space-y-3 shadow-xl">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2 text-gray-300">
+                <span className="font-semibold text-white">{generationStep}</span>
+                {estimatedTimeRemaining && isGenerating && (
+                  <span className="text-gray-400 text-[11px] hidden sm:inline">
+                    (Temps estimé : {estimatedTimeRemaining})
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 font-mono">
+                <span className="text-purple-300">
+                  {segments.filter((s) => s.status === 'completed').length} / {segments.length} segments
+                </span>
+                <span className="text-purple-400 font-bold">{generationProgress}%</span>
+              </div>
             </div>
-            <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden">
+
+            {/* Progress Bar */}
+            <div className="w-full h-2.5 bg-gray-800/80 rounded-full overflow-hidden p-[1px]">
               <div
                 style={{ width: `${generationProgress}%` }}
-                className="h-full bg-gradient-to-r from-purple-500 to-cyan-400 transition-all duration-300 rounded-full"
+                className="h-full bg-gradient-to-r from-purple-500 via-indigo-500 to-cyan-400 transition-all duration-300 rounded-full"
               />
+            </div>
+
+            {/* Segment Chips Matrix */}
+            <div className="pt-2">
+              <span className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold block mb-2">
+                File d'attente asynchrone des segments :
+              </span>
+              <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1">
+                {segments.map((seg) => (
+                  <div
+                    key={seg.index}
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-mono flex items-center gap-1.5 border transition-all ${
+                      seg.status === 'completed'
+                        ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                        : seg.status === 'generating'
+                        ? 'bg-purple-950/80 border-purple-400 text-purple-200 animate-pulse ring-1 ring-purple-400'
+                        : seg.status === 'failed'
+                        ? 'bg-red-950/60 border-red-500/40 text-red-300'
+                        : 'bg-white/5 border-white/5 text-gray-500'
+                    }`}
+                    title={seg.text}
+                  >
+                    <span>#{seg.index}</span>
+                    {seg.status === 'completed' && <CheckCircle2 className="w-3 h-3 text-emerald-400" />}
+                    {seg.status === 'generating' && <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-ping" />}
+                    {seg.status === 'failed' && <AlertCircle className="w-3 h-3 text-red-400" />}
+                    {seg.duration && (
+                      <span className="opacity-80">({seg.duration.toFixed(1)}s)</span>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}

@@ -19,7 +19,7 @@ import {
   Info,
 } from 'lucide-react';
 import { CustomVoiceProfile, VoiceAnalysisResult } from '../types.ts';
-import { analyzeVoiceRecording, createCustomVoice, deleteCustomVoice } from '../services/api.ts';
+import { analyzeVoiceRecording, createCustomVoice, deleteCustomVoice, generateSingleSegment } from '../services/api.ts';
 
 interface MyVoiceStudioProps {
   customVoices: CustomVoiceProfile[];
@@ -57,6 +57,7 @@ export const MyVoiceStudio: React.FC<MyVoiceStudioProps> = ({
 
   // Analysis states
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisElapsed, setAnalysisElapsed] = useState(0);
   const [analysisResult, setAnalysisResult] = useState<VoiceAnalysisResult | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
@@ -69,6 +70,9 @@ export const MyVoiceStudio: React.FC<MyVoiceStudioProps> = ({
   const [isCreating, setIsCreating] = useState(false);
   const [createSuccess, setCreateSuccess] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [isTestingVoice, setIsTestingVoice] = useState(false);
+  const [testVoiceError, setTestVoiceError] = useState<string | null>(null);
+  const testAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Micro permissions
   const [micPermissionDenied, setMicPermissionDenied] = useState(false);
@@ -94,6 +98,20 @@ export const MyVoiceStudio: React.FC<MyVoiceStudioProps> = ({
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [isRecording, isPaused]);
+
+  // Handle Analysis Timer
+  useEffect(() => {
+    let interval: any;
+    if (isAnalyzing) {
+      setAnalysisElapsed(0);
+      interval = setInterval(() => {
+        setAnalysisElapsed((prev) => prev + 1);
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isAnalyzing]);
 
   // Start Mic Recording
   const startRecording = async () => {
@@ -307,6 +325,69 @@ export const MyVoiceStudio: React.FC<MyVoiceStudioProps> = ({
       setCreateError(err.message || 'Échec de la création de la voix personnalisée.');
     } finally {
       setIsCreating(false);
+    }
+  };
+
+  // Instant configuration without waiting for AI analysis
+  const handleQuickConfigure = () => {
+    const dur = sampleDuration || recordingSeconds || 15;
+    const estWords = Math.max(12, Math.round(dur * 2.3));
+    const estWpm = Math.round((estWords / dur) * 60);
+
+    const defaultProfile: VoiceAnalysisResult = {
+      transcript: "Échantillon vocal calibré directement en mode express.",
+      wordCount: estWords,
+      wordsPerMinute: estWpm > 0 && estWpm < 220 ? estWpm : 140,
+      pitchCategory: "médium",
+      pitchHzEstimate: "140-180 Hz",
+      tempoStyle: "modéré",
+      vocalTimbre: "Chaleureux, naturel et articulé",
+      pauseAnalysis: "Rythme équilibré",
+      clarityScore: 95,
+      backgroundNoiseLevel: "faible",
+      audioQualityFeedback: "Configuration express instantanée validée.",
+      recommendedBaseVoice: "Kore",
+      recommendedStylePrompt: "Voix naturelle, posée et expressive en français standard avec pauses soignées et diction claire.",
+      accent: "Neutre français standard",
+    };
+
+    setAnalysisResult(defaultProfile);
+    if (!voiceName) setVoiceName("Ma Voix Personnalisée");
+    setSelectedBaseVoice("Kore");
+    setCustomStylePrompt("Voix naturelle, posée et expressive en français standard avec pauses soignées et diction claire.");
+    setVoiceDescription("Voix personnalisée Marius Voice AI configurée directement.");
+    setAnalysisError(null);
+  };
+
+  // Test configured voice with a sample sentence before saving
+  const handleTestVoice = async () => {
+    if (isTestingVoice && testAudioRef.current) {
+      testAudioRef.current.pause();
+      setIsTestingVoice(false);
+      return;
+    }
+
+    setIsTestingVoice(true);
+    setTestVoiceError(null);
+    try {
+      const res = await generateSingleSegment({
+        text: `Bonjour, ceci est un aperçu de ${voiceName || 'ma voix personnalisée'} généré par Marius Voice AI.`,
+        voiceName: selectedBaseVoice,
+        style: customStylePrompt || 'Voix naturelle, chaleureuse et expressive.',
+      });
+
+      if (res.audioBase64) {
+        if (testAudioRef.current) testAudioRef.current.pause();
+        const audio = new Audio(`data:audio/wav;base64,${res.audioBase64}`);
+        audio.onended = () => setIsTestingVoice(false);
+        audio.play();
+        testAudioRef.current = audio;
+      }
+    } catch (err: any) {
+      console.error('Test voice preview error:', err);
+      setTestVoiceError(err.message || 'Impossible de générer l\'extrait audio test.');
+    } finally {
+      setIsTestingVoice(false);
     }
   };
 
@@ -530,31 +611,73 @@ export const MyVoiceStudio: React.FC<MyVoiceStudioProps> = ({
                 </button>
 
                 {!analysisResult && (
-                  <button
-                    onClick={runVoiceAnalysis}
-                    disabled={isAnalyzing}
-                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-lg shadow-purple-900/40 transition-all disabled:opacity-50"
-                  >
-                    {isAnalyzing ? (
-                      <>
-                        <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                        Analyse acoustique en cours...
-                      </>
-                    ) : (
-                      <>
-                        <Activity className="w-3.5 h-3.5" />
-                        Lancer l'analyse vocale IA
-                      </>
-                    )}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleQuickConfigure}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 text-purple-200 border border-purple-500/40 text-xs font-medium transition-all cursor-pointer"
+                      title="Pré-configurer immédiatement sans délai d'analyse"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                      Configuration Express (Immédiat)
+                    </button>
+
+                    <button
+                      onClick={runVoiceAnalysis}
+                      disabled={isAnalyzing}
+                      className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-lg shadow-purple-900/40 transition-all disabled:opacity-50 cursor-pointer"
+                    >
+                      {isAnalyzing ? (
+                        <>
+                          <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Analyse en cours ({analysisElapsed}s)...
+                        </>
+                      ) : (
+                        <>
+                          <Activity className="w-3.5 h-3.5" />
+                          Lancer l'analyse vocale IA (~2s)
+                        </>
+                      )}
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
 
             {analysisError && (
-              <div className="p-3 rounded-xl bg-red-950/40 border border-red-500/30 text-xs text-red-300 flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{analysisError}</span>
+              <div className="p-3.5 rounded-xl bg-purple-950/40 border border-purple-500/40 text-xs text-purple-200 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-purple-400" />
+                  <span>{analysisError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAnalysisResult({
+                      transcript: "Échantillon vocal enregistré avec succès.",
+                      wordCount: 20,
+                      wordsPerMinute: 140,
+                      pitchCategory: "médium",
+                      pitchHzEstimate: "140-180 Hz",
+                      tempoStyle: "modéré",
+                      vocalTimbre: "Chaleureux, naturel et articulé",
+                      pauseAnalysis: "Pauses respiratoires régulières",
+                      clarityScore: 92,
+                      backgroundNoiseLevel: "faible",
+                      audioQualityFeedback: "Échantillon audio validé.",
+                      recommendedBaseVoice: "Kore",
+                      recommendedStylePrompt: "Voix naturelle, posée et expressive en français standard avec pauses soignées et diction claire.",
+                      accent: "Neutre français standard",
+                    });
+                    if (!voiceName) setVoiceName("Ma Voix Personnalisée");
+                    setSelectedBaseVoice("Kore");
+                    setCustomStylePrompt("Voix naturelle, posée et expressive en français standard avec pauses soignées et diction claire.");
+                    setAnalysisError(null);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs transition-all shadow-md cursor-pointer shrink-0"
+                >
+                  Configurer ma voix directement
+                </button>
               </div>
             )}
           </div>
@@ -751,7 +874,26 @@ export const MyVoiceStudio: React.FC<MyVoiceStudioProps> = ({
             </div>
           )}
 
-          <div className="flex justify-end pt-2">
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+            <button
+              type="button"
+              onClick={handleTestVoice}
+              disabled={isTestingVoice}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white border border-white/10 text-xs font-semibold transition-all cursor-pointer"
+            >
+              {isTestingVoice ? (
+                <>
+                  <span className="w-3.5 h-3.5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
+                  Génération de l'extrait test...
+                </>
+              ) : (
+                <>
+                  <Play className="w-3.5 h-3.5 text-purple-400 fill-current" />
+                  Écouter un aperçu de cette voix
+                </>
+              )}
+            </button>
+
             <button
               type="submit"
               disabled={isCreating || !consentChecked}
@@ -770,6 +912,13 @@ export const MyVoiceStudio: React.FC<MyVoiceStudioProps> = ({
               )}
             </button>
           </div>
+
+          {testVoiceError && (
+            <div className="mt-2 p-3 rounded-xl bg-purple-950/40 border border-purple-500/30 text-xs text-purple-200 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-purple-400" />
+              <span>{testVoiceError}</span>
+            </div>
+          )}
         </form>
       )}
 

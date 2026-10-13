@@ -1,8 +1,24 @@
-import { Mic, Radio, Library, Sliders, Sparkles, Volume2, Smartphone } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import {
+  Mic,
+  Radio,
+  Library,
+  Sliders,
+  Sparkles,
+  Volume2,
+  Smartphone,
+  Key,
+  Gauge,
+  ShieldCheck,
+  AlertTriangle,
+} from 'lucide-react';
+import { apiKeyManager } from '../services/apiKeyManager.ts';
+
+export type TabType = 'tts' | 'my-voice' | 'creations' | 'quotas' | 'api-key' | 'settings';
 
 interface NavbarProps {
-  activeTab: 'tts' | 'my-voice' | 'creations' | 'settings';
-  setActiveTab: (tab: 'tts' | 'my-voice' | 'creations' | 'settings') => void;
+  activeTab: TabType;
+  setActiveTab: (tab: TabType) => void;
   creationsCount: number;
   customVoicesCount: number;
   isGenerating?: boolean;
@@ -17,21 +33,30 @@ export const Navbar: React.FC<NavbarProps> = ({
   isGenerating,
   onOpenMobileInstall,
 }) => {
+  const [hasApiKey, setHasApiKey] = useState(() => apiKeyManager.hasKey());
+
+  useEffect(() => {
+    // Keep key indicator in sync
+    const check = () => setHasApiKey(apiKeyManager.hasKey());
+    const interval = setInterval(check, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <>
       {/* Top Desktop & Mobile Header */}
-      <header className="sticky top-0 z-40 bg-[#0c0e17]/90 backdrop-blur-md border-b border-purple-900/20 px-4 lg:px-8 py-3 transition-all">
+      <header className="sticky top-0 z-40 bg-[#0c0e17]/95 backdrop-blur-md border-b border-purple-900/20 px-3 sm:px-6 lg:px-8 py-2.5 transition-all">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           {/* Logo & Brand */}
-          <div className="flex items-center gap-3 cursor-pointer" onClick={() => setActiveTab('tts')}>
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-cyan-400 p-[1px] shadow-lg shadow-purple-900/40">
+          <div className="flex items-center gap-2.5 sm:gap-3 cursor-pointer" onClick={() => setActiveTab('tts')}>
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-cyan-400 p-[1px] shadow-lg shadow-purple-900/40">
               <div className="w-full h-full bg-[#0d0f19] rounded-[11px] flex items-center justify-center">
-                <Radio className="w-5 h-5 text-purple-400 animate-pulse" />
+                <Radio className="w-4 h-4 sm:w-5 sm:h-5 text-purple-400 animate-pulse" />
               </div>
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-extrabold text-lg sm:text-xl tracking-tight bg-gradient-to-r from-white via-purple-100 to-purple-400 bg-clip-text text-transparent">
+                <span className="font-extrabold text-base sm:text-xl tracking-tight bg-gradient-to-r from-white via-purple-100 to-purple-400 bg-clip-text text-transparent">
                   MARIUS VOICE AI
                 </span>
                 <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-purple-500/15 border border-purple-500/30 text-purple-300">
@@ -46,28 +71,28 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           {/* Desktop Navigation Links */}
-          <nav className="hidden md:flex items-center gap-1 bg-[#131625] p-1 rounded-xl border border-white/5">
+          <nav className="hidden lg:flex items-center gap-1 bg-[#131625] p-1 rounded-xl border border-white/5 text-xs">
             <button
               onClick={() => setActiveTab('tts')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
                 activeTab === 'tts'
                   ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-900/30 font-semibold'
                   : 'text-gray-400 hover:text-white hover:bg-white/5'
               }`}
             >
-              <Volume2 className="w-4 h-4" />
+              <Volume2 className="w-3.5 h-3.5" />
               Synthèse Vocale
             </button>
 
             <button
               onClick={() => setActiveTab('my-voice')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all relative ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all relative cursor-pointer ${
                 activeTab === 'my-voice'
                   ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-900/30 font-semibold'
                   : 'text-gray-400 hover:text-white hover:bg-white/5'
               }`}
             >
-              <Mic className="w-4 h-4" />
+              <Mic className="w-3.5 h-3.5" />
               Ma Voix
               {customVoicesCount > 0 && (
                 <span className="ml-1 text-[10px] bg-purple-400/20 text-purple-300 border border-purple-400/30 px-1.5 py-0.2 rounded-full font-bold">
@@ -78,14 +103,14 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             <button
               onClick={() => setActiveTab('creations')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all relative ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all relative cursor-pointer ${
                 activeTab === 'creations'
                   ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-900/30 font-semibold'
                   : 'text-gray-400 hover:text-white hover:bg-white/5'
               }`}
             >
-              <Library className="w-4 h-4" />
-              Mes Créations
+              <Library className="w-3.5 h-3.5" />
+              Créations
               {creationsCount > 0 && (
                 <span className="ml-1 text-[10px] bg-white/10 text-gray-200 px-1.5 py-0.2 rounded-full font-bold">
                   {creationsCount}
@@ -94,118 +119,169 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
 
             <button
+              onClick={() => setActiveTab('quotas')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
+                activeTab === 'quotas'
+                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-900/30 font-semibold'
+                  : 'text-gray-400 hover:text-white hover:bg-white/5'
+              }`}
+            >
+              <Gauge className="w-3.5 h-3.5" />
+              Quotas & Conso
+            </button>
+
+            <button
+              onClick={() => setActiveTab('api-key')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all relative cursor-pointer ${
+                activeTab === 'api-key'
+                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-900/30 font-semibold'
+                  : 'text-gray-400 hover:text-white hover:bg-white/5'
+              }`}
+            >
+              <Key className="w-3.5 h-3.5" />
+              Clé API
+              <span className={`w-2 h-2 rounded-full ml-1 ${hasApiKey ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+            </button>
+
+            <button
               onClick={() => setActiveTab('settings')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
                 activeTab === 'settings'
                   ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-900/30 font-semibold'
                   : 'text-gray-400 hover:text-white hover:bg-white/5'
               }`}
             >
-              <Sliders className="w-4 h-4" />
-              Paramètres
+              <Sliders className="w-3.5 h-3.5" />
+              Réglages
             </button>
           </nav>
 
-          {/* Right Status Pill */}
           {/* Right Status Pill & Mobile Install Button */}
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-2">
+            {/* Quick Key Status button */}
+            <button
+              type="button"
+              onClick={() => setActiveTab('api-key')}
+              className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
+                hasApiKey
+                  ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300 hover:bg-emerald-900/40'
+                  : 'bg-amber-950/40 border-amber-500/30 text-amber-300 hover:bg-amber-900/40'
+              }`}
+              title="Gérer votre clé API personnelle Google Gemini"
+            >
+              {hasApiKey ? (
+                <>
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-[11px]">Clé Active</span>
+                </>
+              ) : (
+                <>
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="text-[11px]">Configurer Clé API</span>
+                </>
+              )}
+            </button>
+
             {onOpenMobileInstall && (
               <button
                 onClick={onOpenMobileInstall}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 text-xs font-semibold transition-all cursor-pointer shadow-sm shadow-purple-900/30"
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 text-xs font-semibold transition-all cursor-pointer shadow-sm shadow-purple-900/30"
                 title="Installer sur votre smartphone Android"
               >
                 <Smartphone className="w-3.5 h-3.5 text-purple-400" />
                 <span className="hidden sm:inline">Installer Mobile</span>
-                <span className="sm:hidden text-[11px]">Installer</span>
+                <span className="sm:hidden text-[11px]">Mobile</span>
               </button>
             )}
 
-            {isGenerating ? (
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-purple-900/40 border border-purple-500/40 text-purple-300 text-xs font-medium animate-pulse">
+            {isGenerating && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-purple-900/40 border border-purple-500/40 text-purple-300 text-xs font-medium animate-pulse">
                 <span className="w-2 h-2 rounded-full bg-purple-400"></span>
-                Génération...
-              </div>
-            ) : (
-              <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-950/40 border border-emerald-500/30 text-emerald-400 text-xs font-medium">
-                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                Gemini 3.8 TTS
+                <span className="text-[11px]">Génération...</span>
               </div>
             )}
-            <button
-              onClick={() => setActiveTab('settings')}
-              className="md:hidden p-2 text-gray-400 hover:text-white rounded-lg hover:bg-white/5"
-              aria-label="Paramètres"
-            >
-              <Sliders className="w-5 h-5" />
-            </button>
           </div>
         </div>
       </header>
 
-      {/* Mobile Bottom Navigation Bar */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#0d0f19]/95 backdrop-blur-lg border-t border-purple-900/20 px-2 py-2">
-        <div className="grid grid-cols-4 gap-1">
+      {/* Bottom Navigation for Mobile Devices */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-[#0a0c14]/95 backdrop-blur-lg border-t border-white/10 px-2 py-1 shadow-2xl">
+        <div className="grid grid-cols-5 gap-1 max-w-md mx-auto">
           <button
             onClick={() => setActiveTab('tts')}
-            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all ${
+            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
               activeTab === 'tts'
-                ? 'text-purple-400 font-semibold bg-purple-500/10'
+                ? 'text-purple-400 font-semibold bg-purple-500/15'
                 : 'text-gray-400 hover:text-gray-200'
             }`}
           >
-            <Volume2 className="w-5 h-5 mb-0.5" />
-            <span className="text-[11px] leading-tight">Synthèse</span>
+            <Volume2 className="w-4 h-4 mb-0.5" />
+            <span className="text-[10px] leading-tight">Synthèse</span>
           </button>
 
           <button
             onClick={() => setActiveTab('my-voice')}
-            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all relative ${
+            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all relative cursor-pointer ${
               activeTab === 'my-voice'
-                ? 'text-purple-400 font-semibold bg-purple-500/10'
+                ? 'text-purple-400 font-semibold bg-purple-500/15'
                 : 'text-gray-400 hover:text-gray-200'
             }`}
           >
             <div className="relative">
-              <Mic className="w-5 h-5 mb-0.5" />
+              <Mic className="w-4 h-4 mb-0.5" />
               {customVoicesCount > 0 && (
                 <span className="absolute -top-1 -right-2 w-3.5 h-3.5 bg-purple-500 text-white rounded-full text-[9px] flex items-center justify-center font-bold">
                   {customVoicesCount}
                 </span>
               )}
             </div>
-            <span className="text-[11px] leading-tight">Ma Voix</span>
+            <span className="text-[10px] leading-tight">Ma Voix</span>
           </button>
 
           <button
             onClick={() => setActiveTab('creations')}
-            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all relative ${
+            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all relative cursor-pointer ${
               activeTab === 'creations'
-                ? 'text-purple-400 font-semibold bg-purple-500/10'
+                ? 'text-purple-400 font-semibold bg-purple-500/15'
                 : 'text-gray-400 hover:text-gray-200'
             }`}
           >
             <div className="relative">
-              <Library className="w-5 h-5 mb-0.5" />
+              <Library className="w-4 h-4 mb-0.5" />
               {creationsCount > 0 && (
                 <span className="absolute -top-1 -right-2 w-3.5 h-3.5 bg-indigo-500 text-white rounded-full text-[9px] flex items-center justify-center font-bold">
                   {creationsCount}
                 </span>
               )}
             </div>
-            <span className="text-[11px] leading-tight">Créations</span>
+            <span className="text-[10px] leading-tight">Créations</span>
           </button>
 
           <button
-            onClick={() => setActiveTab('settings')}
-            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all ${
-              activeTab === 'settings'
-                ? 'text-purple-400 font-semibold bg-purple-500/10'
+            onClick={() => setActiveTab('quotas')}
+            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
+              activeTab === 'quotas'
+                ? 'text-purple-400 font-semibold bg-purple-500/15'
                 : 'text-gray-400 hover:text-gray-200'
             }`}
           >
-            <Sliders className="w-5 h-5 mb-0.5" />
-            <span className="text-[11px] leading-tight">Réglages</span>
+            <Gauge className="w-4 h-4 mb-0.5" />
+            <span className="text-[10px] leading-tight">Quotas</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('api-key')}
+            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all relative cursor-pointer ${
+              activeTab === 'api-key'
+                ? 'text-purple-400 font-semibold bg-purple-500/15'
+                : 'text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            <div className="relative">
+              <Key className="w-4 h-4 mb-0.5" />
+              <span className={`absolute -top-0.5 -right-1 w-2 h-2 rounded-full ${hasApiKey ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+            </div>
+            <span className="text-[10px] leading-tight">Clé API</span>
           </button>
         </div>
       </nav>

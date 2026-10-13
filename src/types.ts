@@ -59,6 +59,7 @@ export interface GenerationSegment {
   duration?: number;
   byteSize?: number;
   status: 'pending' | 'generating' | 'completed' | 'failed';
+  retries?: number;
   error?: string;
 }
 
@@ -86,4 +87,43 @@ export interface UserStats {
   totalCharacters: number;
   totalSeconds: number;
   customVoicesCount: number;
+}
+
+export interface ApiKeyConfig {
+  hasKey: boolean;
+  maskedKey: string;
+  savedLocally: boolean;
+  isValidated: boolean;
+  lastTestedAt?: string;
+  testStatus?: 'idle' | 'testing' | 'success' | 'error';
+  testMessage?: string;
+  accessibleModels?: string[];
+  isQuotaExhausted?: boolean;
+}
+
+export interface QuotaLogEntry {
+  id: string;
+  timestamp: string;
+  model: string;
+  type: 'success' | 'rate_limit_429' | 'quota_exhausted_429' | 'server_spike_503' | 'error';
+  message: string;
+  characters?: number;
+  tokensEstimated?: number;
+}
+
+export interface QuotaStatus {
+  dailyRequestsUsed: number;
+  dailyRequestsLimit: number;
+  requestsRemainingEstimated: number;
+  totalCharactersToday: number;
+  tokensConsumedToday: number;
+  rateLimitStatus: 'normal' | 'rate_limited' | 'quota_exhausted';
+  lastRateLimitMessage?: string;
+  resetTimeBenin: string;
+  resetTimeLocal: string;
+  timeUntilReset: string;
+  isVerifiedFromGoogle: boolean;
+  lastUpdated: string;
+  sourceLabel: string;
+  history: QuotaLogEntry[];
 }
