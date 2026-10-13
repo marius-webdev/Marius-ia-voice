@@ -215,6 +215,12 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
       return;
     }
 
+    if (!apiKeyManager.hasKey()) {
+      setErrorNotice('Clé API Google Gemini requise pour écouter un échantillon. Veuillez configurer votre clé dans l\'onglet « Ma clé API Google ».');
+      if (onNavigateToApiKey) onNavigateToApiKey();
+      return;
+    }
+
     setPreviewingVoiceId(voice.id);
     try {
       const result = await generateSingleSegment({
@@ -254,6 +260,14 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
 
   // Main Generation Handler supporting Resume and controlled asynchronous queue
   const handleGenerate = async (isResume = false) => {
+    if (!apiKeyManager.hasKey()) {
+      setErrorNotice('Clé API Google Gemini requise. Marius Voice AI fonctionne exclusivement avec votre clé API personnelle. Veuillez renseigner votre clé dans l\'onglet « Ma clé API Google » avant de générer.');
+      if (onNavigateToApiKey) {
+        onNavigateToApiKey();
+      }
+      return;
+    }
+
     if (!scriptText.trim()) {
       setErrorNotice('Veuillez renseigner un texte à synthétiser.');
       return;
@@ -1077,20 +1091,20 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
       <div className="space-y-4">
         {/* Personal API Key Missing Advisory Banner */}
         {!apiKeyManager.hasKey() && (
-          <div className="p-4 rounded-2xl bg-purple-950/40 border border-purple-500/30 text-xs text-purple-200 flex flex-wrap items-center justify-between gap-3 shadow-lg">
+          <div className="p-4 rounded-2xl bg-amber-950/40 border border-amber-500/40 text-xs text-amber-200 flex flex-wrap items-center justify-between gap-3 shadow-lg">
             <div className="flex items-center gap-2.5">
-              <Key className="w-4 h-4 text-purple-400 shrink-0" />
+              <Key className="w-4 h-4 text-amber-400 shrink-0" />
               <span>
-                <strong>Clé API Google non enregistrée :</strong> Il est fortement conseillé de renseigner votre clé personnelle pour éviter les limitations de requêtes partagées.
+                <strong>Clé API Google Gemini requise :</strong> Marius Voice AI fonctionne exclusivement avec votre clé API personnelle Google Gemini. Aucune clé développeur partagée n'est utilisée.
               </span>
             </div>
             {onNavigateToApiKey && (
               <button
                 type="button"
                 onClick={onNavigateToApiKey}
-                className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition-all shrink-0 cursor-pointer"
+                className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs transition-all shrink-0 cursor-pointer"
               >
-                Configurer ma clé →
+                Configurer ma clé API →
               </button>
             )}
           </div>

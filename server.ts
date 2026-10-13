@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
+import os from 'os';
 import {
   concatenateWavBuffers,
   convertAudioWithFfmpeg,
@@ -37,8 +38,9 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '60mb' }));
 app.use(express.urlencoded({ extended: true, limit: '60mb' }));
 
-// Ensure data storage directory exists
-const DATA_DIR = path.join(__dirname, 'data');
+// Ensure data storage directory exists (use os.tmpdir() on Vercel to avoid read-only filesystem errors)
+const isVercel = Boolean(process.env.VERCEL);
+const DATA_DIR = isVercel ? path.join(os.tmpdir(), 'marius_data') : path.join(__dirname, 'data');
 const CREATIONS_FILE = path.join(DATA_DIR, 'creations.json');
 const VOICES_FILE = path.join(DATA_DIR, 'custom_voices.json');
 const JOBS_FILE = path.join(DATA_DIR, 'tts_jobs.json');
@@ -47,7 +49,7 @@ if (!fs.existsSync(DATA_DIR)) {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   } catch (err) {
-    console.error('Failed to create data directory:', err);
+    console.warn('Notice: data directory initialized in fallback mode:', err);
   }
 }
 
@@ -56,6 +58,11 @@ function loadCreations(): any[] {
   try {
     if (fs.existsSync(CREATIONS_FILE)) {
       const raw = fs.readFileSync(CREATIONS_FILE, 'utf-8');
+      return JSON.parse(raw);
+    }
+    const seedFile = path.join(__dirname, 'data', 'creations.json');
+    if (fs.existsSync(seedFile)) {
+      const raw = fs.readFileSync(seedFile, 'utf-8');
       return JSON.parse(raw);
     }
   } catch (e) {
@@ -76,6 +83,11 @@ function loadCustomVoices(): any[] {
   try {
     if (fs.existsSync(VOICES_FILE)) {
       const raw = fs.readFileSync(VOICES_FILE, 'utf-8');
+      return JSON.parse(raw);
+    }
+    const seedFile = path.join(__dirname, 'data', 'custom_voices.json');
+    if (fs.existsSync(seedFile)) {
+      const raw = fs.readFileSync(seedFile, 'utf-8');
       return JSON.parse(raw);
     }
   } catch (e) {
@@ -374,10 +386,9 @@ app.post('/api/auth/verify-key', async (req: Request, res: Response) => {
       if (ttsErrStr.includes('RESOURCE_EXHAUSTED') || ttsErrStr.includes('429') || ttsErrStr.includes('Quota')) {
         isQuotaExhausted = true;
         ttsNotice = ' Le quota du modèle TTS est temporairement épuisé sur ce projet Google.';
-        modelsVerified.push('gemini-3.8-flash-lite-tts (Quota atteint)');
       } else {
-        modelsVerified.push('gemini-3.8-flash-lite-tts (Vérifié)');
-        modelsVerified.push('gemini-3.8-flash-tts (Vérifié)');
+        ttsNotice = ' Le modèle TTS n\'a pas pu être validé sur ce projet Google (accès restreint ou modèle non activé).';
+        modelsVerified.push('gemini-3.8-flash-lite-tts (Non disponible sur ce projet)');
       }
     }
 
@@ -479,58 +490,50 @@ app.delete('/api/custom-voices/:id', (req: Request, res: Response) => {
   }
 });
 
-// Resilient TTS generator with automatic failover between flash-tts and flash-lite-tts
-async function generateTtsWithFallback(
+// Generates speech with the explicit requested model without silent model switching
+async function generateTts(
   ai: GoogleGenAI,
   text: string,
   stylePrompt: string,
-  voiceName: string
+  voiceName: string,
+  model = 'gemini-3.8-flash-tts'
 ): Promise<{ base64Audio: string; modelUsed: string; tokensConsumed: number }> {
-  const models = ['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts'];
-  let lastErr: any = null;
-
-  for (const model of models) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: [
+  const response = await ai.models.generateContent({
+    model,
+    contents: [
+      {
+        role: 'user',
+        parts: [
           {
-            role: 'user',
-            parts: [
-              {
-                text: text.trim(),
-                speechMetadata: {
-                  style: stylePrompt.trim() || 'Narration claire, naturelle et professionnelle en français.',
-                },
-              },
-            ],
-          },
-        ],
-        config: {
-          responseModalities: ['AUDIO'],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName },
+            text: text.trim(),
+            speechMetadata: {
+              style: stylePrompt.trim() || 'Narration claire, naturelle et professionnelle en français.',
             },
           },
+        ],
+      },
+    ],
+    config: {
+      responseModalities: ['AUDIO'],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: { voiceName },
         },
-      });
+      },
+    },
+  });
 
-      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      if (base64Audio) {
-        const tokens =
-          response.usageMetadata?.candidatesTokenCount ||
-          response.usageMetadata?.totalTokenCount ||
-          Math.round(text.length * 0.35);
-        return { base64Audio, modelUsed: model, tokensConsumed: tokens };
-      }
-    } catch (err: any) {
-      lastErr = err;
-      console.warn(`[TTS Engine] Model ${model} failed, testing next fallback...`, err?.message?.slice(0, 120));
-    }
+  const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+  if (!base64Audio) {
+    throw new Error(`Aucune trame audio retournée par le modèle ${model}.`);
   }
 
-  throw lastErr || new Error('Aucune donnée audio retournée par le moteur vocal.');
+  const tokens =
+    response.usageMetadata?.candidatesTokenCount ||
+    response.usageMetadata?.totalTokenCount ||
+    Math.round(text.length * 0.35);
+
+  return { base64Audio, modelUsed: model, tokensConsumed: tokens };
 }
 
 // Voice Analysis endpoint (Acoustic profiling and Voice Design calibration)
@@ -570,72 +573,41 @@ Retourne UNIQUEMENT un objet JSON valide avec cette structure exacte :
 }
 Réponds uniquement en JSON sans balises markdown.`;
 
-    let analysisData: any = null;
-
-    try {
-      const candidateModels = ['gemini-3.1-flash-lite', 'gemini-3.8-flash'];
-      for (const model of candidateModels) {
-        try {
-          const resp = await ai.models.generateContent({
-            model,
-            contents: [
-              {
-                role: 'user',
-                parts: [
-                  {
-                    inlineData: {
-                      mimeType: cleanMime,
-                      data: audioBase64,
-                    },
-                  },
-                  {
-                    text: analysisPrompt,
-                  },
-                ],
+    const model = 'gemini-3.1-flash-lite';
+    const resp = await ai.models.generateContent({
+      model,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              inlineData: {
+                mimeType: cleanMime,
+                data: audioBase64,
               },
-            ],
-            config: {
-              responseMimeType: 'application/json',
             },
-          });
+            {
+              text: analysisPrompt,
+            },
+          ],
+        },
+      ],
+      config: {
+        responseMimeType: 'application/json',
+      },
+    });
 
-          const rawText = resp.text || '{}';
-          try {
-            analysisData = JSON.parse(rawText.trim());
-            break;
-          } catch {
-            const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              analysisData = JSON.parse(jsonMatch[0]);
-              break;
-            }
-          }
-        } catch (modelErr: any) {
-          console.warn(`[Voice Analysis] Model ${model} notice:`, modelErr?.message?.slice(0, 100));
-        }
+    const rawText = resp.text || '{}';
+    let analysisData: any = null;
+    try {
+      analysisData = JSON.parse(rawText.trim());
+    } catch {
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        analysisData = JSON.parse(jsonMatch[0]);
+      } else {
+        throw new Error('Impossible d\'extraire le rapport JSON d\'analyse acoustique renvoyé par Gemini.');
       }
-    } catch (analysisErr: any) {
-      console.warn('[Voice Analysis] Using fallback acoustic profile:', analysisErr?.message);
-    }
-
-    if (!analysisData) {
-      analysisData = {
-        transcript: 'Échantillon vocal enregistré et calibré avec succès.',
-        wordCount: estWords,
-        wordsPerMinute: estWpm > 0 && estWpm < 220 ? estWpm : 140,
-        pitchCategory: 'médium',
-        pitchHzEstimate: '140-180 Hz',
-        tempoStyle: 'modéré',
-        vocalTimbre: 'Chaleureux, naturel et articulé',
-        pauseAnalysis: 'Rythme équilibré avec respiration régulière',
-        clarityScore: 94,
-        backgroundNoiseLevel: 'faible',
-        audioQualityFeedback: 'Enregistrement vocal clair, optimisé pour le Voice Design.',
-        recommendedBaseVoice: 'Kore',
-        recommendedStylePrompt: 'Voix naturelle, posée et expressive en français standard avec pauses soignées et diction claire.',
-        accent: 'Neutre français standard',
-        isInstantCalibrated: true,
-      };
     }
 
     res.json({
@@ -657,7 +629,7 @@ Réponds uniquement en JSON sans balises markdown.`;
 // Single segment TTS generation endpoint
 app.post('/api/tts/generate-segment', async (req: Request, res: Response) => {
   try {
-    const { text, voiceName = 'Kore', style = '', speed = 1.0, pitch = 'normal' } = req.body;
+    const { text, voiceName = 'Kore', style = '', speed = 1.0, pitch = 'normal', model = 'gemini-3.8-flash-tts' } = req.body;
     if (!text || !text.trim()) {
       return res.status(400).json({ error: 'Le texte du segment est vide.' });
     }
@@ -676,7 +648,7 @@ app.post('/api/tts/generate-segment', async (req: Request, res: Response) => {
       enrichedStyle += 'Tonalité plus claire et haute. ';
     }
 
-    const ttsResult = await generateTtsWithFallback(ai, text, enrichedStyle, finalVoice);
+    const ttsResult = await generateTts(ai, text, enrichedStyle, finalVoice, model);
     const base64Audio = ttsResult.base64Audio;
     const wavBuffer = Buffer.from(base64Audio, 'base64');
     const duration = getWavDuration(wavBuffer);
@@ -921,6 +893,10 @@ async function startServer() {
   });
 }
 
-startServer().catch((err) => {
-  console.error('Failed to start server:', err);
-});
+if (!process.env.VERCEL) {
+  startServer().catch((err) => {
+    console.error('Failed to start server:', err);
+  });
+}
+
+export default app;

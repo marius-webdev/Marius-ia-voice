@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { CustomVoiceProfile, VoiceAnalysisResult } from '../types.ts';
 import { analyzeVoiceRecording, createCustomVoice, deleteCustomVoice, generateSingleSegment } from '../services/api.ts';
+import { apiKeyManager } from '../services/apiKeyManager.ts';
 
 interface MyVoiceStudioProps {
   customVoices: CustomVoiceProfile[];
@@ -257,6 +258,10 @@ export const MyVoiceStudio: React.FC<MyVoiceStudioProps> = ({
 
   // Trigger Acoustic & Rhythm Analysis with Gemini
   const runVoiceAnalysis = async () => {
+    if (!apiKeyManager.hasKey()) {
+      setAnalysisError('Clé API Google Gemini requise pour l\'analyse acoustique. Veuillez renseigner votre clé personnelle dans l\'onglet « Ma clé API Google ».');
+      return;
+    }
     if (!sampleBase64) return;
     setIsAnalyzing(true);
     setAnalysisError(null);
@@ -364,6 +369,11 @@ export const MyVoiceStudio: React.FC<MyVoiceStudioProps> = ({
     if (isTestingVoice && testAudioRef.current) {
       testAudioRef.current.pause();
       setIsTestingVoice(false);
+      return;
+    }
+
+    if (!apiKeyManager.hasKey()) {
+      setTestVoiceError('Clé API Google Gemini requise pour tester un extrait audio. Veuillez configurer votre clé dans l\'onglet « Ma clé API Google ».');
       return;
     }
 
