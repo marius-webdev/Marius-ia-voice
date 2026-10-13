@@ -1,0 +1,6 @@
+{
+  "name": "Marius Voice AI",
+  "description": "Studio professionnel de synthèse vocale (TTS) avec gemini-3.8-flash-tts, clonage et création de voix personnalisées, et production audio de longue durée.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

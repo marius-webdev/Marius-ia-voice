@@ -1,0 +1,6 @@
+{
+  "summary": "Plan d'installation mobile Android PWA et d'export local pour Marius Voice AI :\n- Configuration du Web App Manifest (manifest.json) et des balises méta mobiles pour Chrome sur Android\n- Intégration d'un bouton et d'un guide 'Installer sur Android' dans l'interface\n- Guide pas-à-pas pour ouvrir l'URL partagée et installer l'application sur smartphone\n- Guide d'exportation du code source pour exécution locale avec Node.js",
+  "updatedAt": "2026-10-13T07:30:47.001264541Z",
+  "requestFeedback": true,
+  "userFacing": true
+}
