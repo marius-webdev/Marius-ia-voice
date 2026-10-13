@@ -19,9 +19,17 @@ interface UsageStatsViewProps {
   stats: UserStats;
   onClearAllData: () => void;
   onOpenMobileInstall?: () => void;
+  onNavigateToApiKey?: () => void;
+  onNavigateToQuotas?: () => void;
 }
 
-export const UsageStatsView: React.FC<UsageStatsViewProps> = ({ stats, onClearAllData, onOpenMobileInstall }) => {
+export const UsageStatsView: React.FC<UsageStatsViewProps> = ({
+  stats,
+  onClearAllData,
+  onOpenMobileInstall,
+  onNavigateToApiKey,
+  onNavigateToQuotas,
+}) => {
   const formatMinutes = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -32,14 +40,35 @@ export const UsageStatsView: React.FC<UsageStatsViewProps> = ({ stats, onClearAl
   return (
     <div className="space-y-8 max-w-5xl mx-auto pb-12">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl sm:text-3xl font-extrabold text-white flex items-center gap-3">
-          <Sliders className="w-7 h-7 text-purple-400" />
-          Paramètres & Utilisation du Studio
-        </h1>
-        <p className="text-sm text-gray-400 mt-1">
-          Suivez votre consommation, les spécifications techniques du moteur audio et la politique de confidentialité.
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-white flex items-center gap-3">
+            <Sliders className="w-7 h-7 text-purple-400" />
+            Paramètres & Utilisation du Studio
+          </h1>
+          <p className="text-sm text-gray-400 mt-1">
+            Suivez votre consommation, les spécifications techniques du moteur audio et la politique de confidentialité.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {onNavigateToApiKey && (
+            <button
+              onClick={onNavigateToApiKey}
+              className="px-3 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/30 text-xs font-semibold cursor-pointer transition-colors"
+            >
+              Ma clé API Google
+            </button>
+          )}
+          {onNavigateToQuotas && (
+            <button
+              onClick={onNavigateToQuotas}
+              className="px-3 py-1.5 rounded-xl bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 text-xs font-semibold cursor-pointer transition-colors"
+            >
+              Quotas & Conso
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Analytics Metric Cards */}

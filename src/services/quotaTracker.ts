@@ -1,71 +1,28 @@
 import { QuotaLogEntry, QuotaStatus } from '../types.ts';
 
-const STORAGE_KEY = 'marius_quota_tracker_v2';
-
-// Calculates next midnight Pacific Time (00:00 PT)
-export function getNextPacificMidnight(): {
-  date: Date;
-  beninFormatted: string;
-  localFormatted: string;
-  timeRemainingFormatted: string;
-} {
-  const now = new Date();
-
-  // Determine current PT offset (Daylight Saving Time in US: UTC-7, Standard Time: UTC-8)
-  // Let's compute precisely using Intl API
-  const ptString = now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' });
-  const ptDate = new Date(ptString);
-
-  // Target next 00:00 in America/Los_Angeles
-  const nextPtMidnight = new Date(ptDate);
-  nextPtMidnight.setHours(24, 0, 0, 0);
-
-  const diffMs = nextPtMidnight.getTime() - ptDate.getTime();
-  const nextTargetUtc = new Date(now.getTime() + diffMs);
-
-  // Format in Benin timezone (Africa/Porto-Novo, UTC+1)
-  const beninFormatted = nextTargetUtc.toLocaleString('fr-FR', {
-    timeZone: 'Africa/Porto-Novo',
-    weekday: 'long',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-
-  // Format in local browser timezone
-  const localFormatted = nextTargetUtc.toLocaleString('fr-FR', {
-    weekday: 'long',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-  const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-  const timeRemainingFormatted = `${diffHours} h ${diffMinutes} min`;
-
-  return {
-    date: nextTargetUtc,
-    beninFormatted: `demain à ${beninFormatted.split(' à ')[1] || '08 h 00'}, heure du Bénin (UTC+1)`,
-    localFormatted,
-    timeRemainingFormatted,
-  };
-}
+const STORAGE_KEY = 'marius_quota_tracker_v3';
 
 export function getTodayDateKey(): string {
-  // Use PT date as key since Google resets at PT midnight
+  // Use ISO date format for local day tracking
   const now = new Date();
-  return now.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+  return now.toISOString().slice(0, 10);
 }
 
 interface StoredQuotaData {
   dateKey: string;
-  requestsUsed: number;
+  observedRequests: number;
+  successfulRequests: number;
+  failedRequests: number;
+  completedSegments: number;
   charactersToday: number;
   tokensConsumedToday: number;
-  rateLimitStatus: 'normal' | 'rate_limited' | 'quota_exhausted';
+  rateLimitStatus: 'normal' | 'rate_limited' | 'quota_exhausted' | 'server_spike_503' | 'unknown';
   lastRateLimitMessage?: string;
-  isVerifiedFromGoogle: boolean;
+  retryAfterSeconds?: number;
+  retryAvailableAt?: string;
+  resetTargetTimeFormatted?: string;
+  resetTargetType: 'confirmed_retry_after' | 'estimated_daily' | 'unknown';
   lastUpdated: string;
-  sourceLabel: string;
   history: QuotaLogEntry[];
 }
 
@@ -80,19 +37,21 @@ function loadStoredData(): StoredQuotaData {
       }
     }
   } catch (e) {
-    console.error('Error loading quota tracker:', e);
+    // Corrupted storage fallback
   }
 
-  // Fresh quota for new day
+  // Clean data for the current calendar day
   return {
     dateKey: todayKey,
-    requestsUsed: 0,
+    observedRequests: 0,
+    successfulRequests: 0,
+    failedRequests: 0,
+    completedSegments: 0,
     charactersToday: 0,
     tokensConsumedToday: 0,
     rateLimitStatus: 'normal',
-    isVerifiedFromGoogle: false,
+    resetTargetType: 'unknown',
     lastUpdated: new Date().toISOString(),
-    sourceLabel: 'Estimation calculée par Marius Voice AI',
     history: [],
   };
 }
@@ -101,56 +60,85 @@ function persistData(data: StoredQuotaData) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   } catch (e) {
-    console.error('Error persisting quota tracker:', e);
+    // Storage quota fallback
   }
 }
 
 export const quotaTracker = {
   getStatus(): QuotaStatus {
     const data = loadStoredData();
-    const pacific = getNextPacificMidnight();
-    const limit = 10; // Base default limit for gemini-3.8-flash-tts free tier
-    const remaining = Math.max(0, limit - data.requestsUsed);
+
+    // Check if a known retry timeout has expired
+    let currentStatus = data.rateLimitStatus;
+    if (data.retryAvailableAt) {
+      const availableTime = new Date(data.retryAvailableAt).getTime();
+      if (Date.now() >= availableTime && currentStatus === 'rate_limited') {
+        currentStatus = 'normal';
+      }
+    }
 
     return {
-      dailyRequestsUsed: data.requestsUsed,
-      dailyRequestsLimit: limit,
-      requestsRemainingEstimated: remaining,
+      // 1. Observed metrics
+      observedRequestsToday: data.observedRequests,
+      successfulRequestsToday: data.successfulRequests,
+      failedRequestsToday: data.failedRequests,
+      completedSegmentsToday: data.completedSegments,
       totalCharactersToday: data.charactersToday,
       tokensConsumedToday: data.tokensConsumedToday,
-      rateLimitStatus: data.rateLimitStatus,
+
+      // 2. Google confirmed capacity (Honest: Google doesn't return project quota balances via generateContent API)
+      googleConfirmedLimit: null,
+      googleRemainingCapacity: null,
+      googleStatusExplanation:
+        "L'API Google Gemini ne fournit aucun point d'accès public permettant d'interroger le solde restant ou les plafonds de facturation de votre projet via la clé API. Consultez votre console Google AI Studio pour les métriques officielles.",
+
+      // 3. Status and limits
+      rateLimitStatus: currentStatus,
       lastRateLimitMessage: data.lastRateLimitMessage,
-      resetTimeBenin: pacific.beninFormatted,
-      resetTimeLocal: pacific.localFormatted,
-      timeUntilReset: pacific.timeRemainingFormatted,
-      isVerifiedFromGoogle: data.isVerifiedFromGoogle,
+      retryAfterSeconds: data.retryAfterSeconds,
+      retryAvailableAt: data.retryAvailableAt,
+      resetTargetTimeFormatted: data.resetTargetTimeFormatted,
+      resetTargetType: data.resetTargetType,
+
       lastUpdated: data.lastUpdated,
-      sourceLabel: data.sourceLabel,
+      sourceLabel: 'Données observées par Marius Voice AI lors de vos sessions',
       history: data.history.slice(0, 30),
     };
+  },
+
+  recordInitiatedRequest() {
+    const data = loadStoredData();
+    data.observedRequests += 1;
+    data.lastUpdated = new Date().toISOString();
+    persistData(data);
   },
 
   recordSuccessfulRequest(params: {
     model: string;
     characters: number;
     tokens?: number;
+    isSegment?: boolean;
     sourceMessage?: string;
   }) {
     const data = loadStoredData();
-    data.requestsUsed += 1;
+    data.successfulRequests += 1;
+    if (params.isSegment !== false) {
+      data.completedSegments += 1;
+    }
     data.charactersToday += params.characters;
     data.tokensConsumedToday += params.tokens || Math.round(params.characters * 0.35);
     data.lastUpdated = new Date().toISOString();
     data.rateLimitStatus = 'normal';
     data.lastRateLimitMessage = undefined;
-    data.sourceLabel = 'Compteur de session en direct Marius Voice AI';
+    data.retryAfterSeconds = undefined;
+    data.retryAvailableAt = undefined;
 
     data.history.unshift({
       id: `req_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       timestamp: new Date().toLocaleTimeString('fr-FR'),
       model: params.model,
       type: 'success',
-      message: params.sourceMessage || `Synthèse réussie (${params.characters} caractères)`,
+      message: params.sourceMessage || `Segment généré (${params.characters} car.)`,
       characters: params.characters,
       tokensEstimated: params.tokens || Math.round(params.characters * 0.35),
     });
@@ -159,45 +147,75 @@ export const quotaTracker = {
     persistData(data);
   },
 
-  recordQuotaExhausted(params: {
+  recordRateLimit(params: {
     model: string;
     rawError: string;
-    retryAfter?: string;
+    retryAfterSeconds?: number;
   }) {
     const data = loadStoredData();
-    data.rateLimitStatus = 'quota_exhausted';
-    data.isVerifiedFromGoogle = true;
-    data.sourceLabel = 'Information vérifiée par Google Gemini API (Code 429 RESOURCE_EXHAUSTED)';
-    data.lastUpdated = new Date().toISOString();
+    data.failedRequests += 1;
+    data.rateLimitStatus = 'rate_limited';
     data.lastRateLimitMessage = params.rawError;
+    data.lastUpdated = new Date().toISOString();
+
+    if (params.retryAfterSeconds && params.retryAfterSeconds > 0) {
+      data.retryAfterSeconds = params.retryAfterSeconds;
+      const targetDate = new Date(Date.now() + params.retryAfterSeconds * 1000);
+      data.retryAvailableAt = targetDate.toISOString();
+      data.resetTargetTimeFormatted = targetDate.toLocaleTimeString('fr-FR', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+      data.resetTargetType = 'confirmed_retry_after';
+    } else {
+      data.retryAfterSeconds = undefined;
+      data.retryAvailableAt = undefined;
+      data.resetTargetTimeFormatted = undefined;
+      data.resetTargetType = 'unknown';
+    }
 
     data.history.unshift({
       id: `err_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       timestamp: new Date().toLocaleTimeString('fr-FR'),
       model: params.model,
-      type: 'quota_exhausted_429',
-      message: `Quota quotidien atteint (Google 429) : ${params.rawError.slice(0, 140)}`,
+      type: 'rate_limit_429',
+      message: `Limite de fréquence atteinte (RPM) : ${params.rawError.slice(0, 120)}`,
     });
 
     if (data.history.length > 50) data.history.splice(50);
     persistData(data);
   },
 
-  recordRateLimitSpike(params: {
+  recordDailyQuotaExhausted(params: {
     model: string;
     rawError: string;
+    retryAfterHours?: number;
   }) {
     const data = loadStoredData();
-    data.rateLimitStatus = 'rate_limited';
-    data.lastUpdated = new Date().toISOString();
+    data.failedRequests += 1;
+    data.rateLimitStatus = 'quota_exhausted';
     data.lastRateLimitMessage = params.rawError;
+    data.lastUpdated = new Date().toISOString();
+
+    if (params.retryAfterHours && params.retryAfterHours > 0) {
+      const targetDate = new Date(Date.now() + params.retryAfterHours * 3600 * 1000);
+      data.resetTargetTimeFormatted = targetDate.toLocaleTimeString('fr-FR', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      data.resetTargetType = 'confirmed_retry_after';
+    } else {
+      data.resetTargetTimeFormatted = 'Indisponible auprès de Google';
+      data.resetTargetType = 'unknown';
+    }
 
     data.history.unshift({
-      id: `spike_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      id: `quota_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       timestamp: new Date().toLocaleTimeString('fr-FR'),
       model: params.model,
-      type: 'rate_limit_429',
-      message: `Ralentissement de fréquence (RPM) : ${params.rawError.slice(0, 140)}`,
+      type: 'quota_exhausted_429',
+      message: `Quota quotidien atteint (RESOURCE_EXHAUSTED) : ${params.rawError.slice(0, 120)}`,
     });
 
     if (data.history.length > 50) data.history.splice(50);
@@ -209,6 +227,9 @@ export const quotaTracker = {
     rawError: string;
   }) {
     const data = loadStoredData();
+    data.failedRequests += 1;
+    data.rateLimitStatus = 'server_spike_503';
+    data.lastRateLimitMessage = params.rawError;
     data.lastUpdated = new Date().toISOString();
 
     data.history.unshift({
@@ -216,24 +237,46 @@ export const quotaTracker = {
       timestamp: new Date().toLocaleTimeString('fr-FR'),
       model: params.model,
       type: 'server_spike_503',
-      message: `Pic de charge mondial serveur (503 UNAVAILABLE)`,
+      message: 'Forte demande temporaire sur les serveurs Google IA (503)',
     });
 
     if (data.history.length > 50) data.history.splice(50);
     persistData(data);
   },
 
-  resetUsage() {
+  recordGeneralError(params: {
+    model: string;
+    message: string;
+  }) {
+    const data = loadStoredData();
+    data.failedRequests += 1;
+    data.lastUpdated = new Date().toISOString();
+
+    data.history.unshift({
+      id: `err_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      timestamp: new Date().toLocaleTimeString('fr-FR'),
+      model: params.model,
+      type: 'error',
+      message: params.message.slice(0, 120),
+    });
+
+    if (data.history.length > 50) data.history.splice(50);
+    persistData(data);
+  },
+
+  clearLocalHistory() {
     const todayKey = getTodayDateKey();
     const fresh: StoredQuotaData = {
       dateKey: todayKey,
-      requestsUsed: 0,
+      observedRequests: 0,
+      successfulRequests: 0,
+      failedRequests: 0,
+      completedSegments: 0,
       charactersToday: 0,
       tokensConsumedToday: 0,
       rateLimitStatus: 'normal',
-      isVerifiedFromGoogle: false,
+      resetTargetType: 'unknown',
       lastUpdated: new Date().toISOString(),
-      sourceLabel: 'Réinitialisé manuellement',
       history: [],
     };
     persistData(fresh);

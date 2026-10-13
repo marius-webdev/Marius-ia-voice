@@ -1,4 +1,4 @@
-import { CustomVoiceProfile, SavedCreation, Voice, VoiceAnalysisResult } from '../types.ts';
+import { CustomVoiceProfile, SavedCreation, TTSJobState, Voice, VoiceAnalysisResult } from '../types.ts';
 import { apiKeyManager } from './apiKeyManager.ts';
 import { quotaTracker } from './quotaTracker.ts';
 
@@ -45,7 +45,7 @@ export async function verifyApiKey(apiKey: string): Promise<{
 export async function getApiKeyStatus(): Promise<{
   hasKey: boolean;
   maskedKey: string;
-  source: 'user' | 'server' | 'none';
+  source: 'user' | 'none';
 }> {
   const res = await fetch('/api/auth/status', {
     headers: getHeaders(),
@@ -66,7 +66,7 @@ export async function getCustomVoices(): Promise<{ customVoices: CustomVoiceProf
   const res = await fetch('/api/custom-voices', {
     headers: getHeaders(),
   });
-  if (!res.ok) throw new Error('Échec du chargement des voix personnalisées');
+  if (!res.ok) throw new Error('Échec du chargement des profils de voix');
   return res.json();
 }
 
@@ -86,7 +86,7 @@ export async function createCustomVoice(payload: {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || 'Erreur lors de la création de la voix');
+    throw new Error(err.error || 'Erreur lors de la création du profil vocal');
   }
   return res.json();
 }
@@ -108,6 +108,8 @@ export async function analyzeVoiceRecording(payload: {
   mimeType: string;
   durationSeconds: number;
 }): Promise<{ success: boolean; analysis: VoiceAnalysisResult }> {
+  quotaTracker.recordInitiatedRequest();
+
   const res = await fetch('/api/voice/analyze', {
     method: 'POST',
     headers: getHeaders(),
@@ -116,15 +118,41 @@ export async function analyzeVoiceRecording(payload: {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     const errorMsg = err.error || 'Échec de l\'analyse vocale';
-    if (errorMsg.includes('429') || errorMsg.includes('Quota')) {
-      quotaTracker.recordQuotaExhausted({
+
+    if (err.errorType === 'DAILY_QUOTA_429') {
+      quotaTracker.recordDailyQuotaExhausted({
         model: 'gemini-3.1-flash-lite',
         rawError: errorMsg,
+      });
+    } else if (err.errorType === 'RATE_LIMIT_429') {
+      quotaTracker.recordRateLimit({
+        model: 'gemini-3.1-flash-lite',
+        rawError: errorMsg,
+        retryAfterSeconds: err.retryAfterSeconds,
+      });
+    } else if (err.errorType === 'SERVER_SPIKE_503') {
+      quotaTracker.recordServerSpike503({
+        model: 'gemini-3.1-flash-lite',
+        rawError: errorMsg,
+      });
+    } else {
+      quotaTracker.recordGeneralError({
+        model: 'gemini-3.1-flash-lite',
+        message: errorMsg,
       });
     }
     throw new Error(errorMsg);
   }
-  return res.json();
+
+  const data = await res.json();
+  quotaTracker.recordSuccessfulRequest({
+    model: 'gemini-3.1-flash-lite',
+    characters: Math.round(payload.durationSeconds * 12),
+    isSegment: false,
+    sourceMessage: 'Analyse et calibrage acoustique Voice Design',
+  });
+
+  return data;
 }
 
 export async function splitScriptSegments(text: string, maxWords = 80): Promise<{ segments: string[] }> {
@@ -150,7 +178,11 @@ export async function generateSingleSegment(payload: {
   byteSize: number;
   modelUsed?: string;
   tokensConsumed?: number;
+  errorType?: string;
+  retryAfterSeconds?: number;
 }> {
+  quotaTracker.recordInitiatedRequest();
+
   const res = await fetch('/api/tts/generate-segment', {
     method: 'POST',
     headers: getHeaders(),
@@ -160,42 +192,86 @@ export async function generateSingleSegment(payload: {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     const errorMsg = err.error || 'Échec de la génération du segment';
+    const errorType = err.errorType || 'UNKNOWN';
+    const retryAfter = err.retryAfterSeconds;
 
-    // Track specific quota/rate limit error in quotaTracker
-    if (
-      errorMsg.includes('Quota quotidien') ||
-      errorMsg.includes('RESOURCE_EXHAUSTED') ||
-      errorMsg.includes('10 requêtes par jour')
-    ) {
-      quotaTracker.recordQuotaExhausted({
+    if (errorType === 'DAILY_QUOTA_429' || errorMsg.includes('Quota de requêtes') || errorMsg.includes('RESOURCE_EXHAUSTED')) {
+      quotaTracker.recordDailyQuotaExhausted({
         model: 'gemini-3.8-flash-tts',
         rawError: errorMsg,
       });
-    } else if (errorMsg.includes('Fréquence de requêtes') || errorMsg.includes('429')) {
-      quotaTracker.recordRateLimitSpike({
+    } else if (errorType === 'RATE_LIMIT_429' || errorMsg.includes('RPM') || errorMsg.includes('Too Many Requests')) {
+      quotaTracker.recordRateLimit({
         model: 'gemini-3.8-flash-tts',
         rawError: errorMsg,
+        retryAfterSeconds: retryAfter,
       });
-    } else if (errorMsg.includes('503') || errorMsg.includes('Forte affluence')) {
+    } else if (errorType === 'SERVER_SPIKE_503' || errorMsg.includes('503') || errorMsg.includes('affluence')) {
       quotaTracker.recordServerSpike503({
         model: 'gemini-3.8-flash-tts',
         rawError: errorMsg,
       });
+    } else {
+      quotaTracker.recordGeneralError({
+        model: 'gemini-3.8-flash-tts',
+        message: errorMsg,
+      });
     }
 
-    throw new Error(errorMsg);
+    const customErr: any = new Error(errorMsg);
+    customErr.errorType = errorType;
+    customErr.retryAfterSeconds = retryAfter;
+    throw customErr;
   }
 
   const data = await res.json();
 
-  // Track success in quotaTracker
   quotaTracker.recordSuccessfulRequest({
     model: data.modelUsed || 'gemini-3.8-flash-tts',
     characters: payload.text.length,
     tokens: data.tokensConsumed,
+    isSegment: true,
   });
 
   return data;
+}
+
+export async function saveTtsJob(job: TTSJobState): Promise<boolean> {
+  try {
+    const res = await fetch('/api/tts/jobs', {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(job),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function getTtsJob(jobId: string): Promise<TTSJobState | null> {
+  try {
+    const res = await fetch(`/api/tts/jobs/${jobId}`, {
+      headers: getHeaders(),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.job || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteTtsJob(jobId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/tts/jobs/${jobId}`, {
+      method: 'DELETE',
+      headers: getHeaders(),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 export async function concatenateAudioSegments(payload: {
@@ -222,27 +298,6 @@ export async function concatenateAudioSegments(payload: {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || 'Échec de l\'assemblage des segments');
-  }
-  return res.json();
-}
-
-export async function generateFullTTS(payload: {
-  text: string;
-  voiceName: string;
-  customVoiceId?: string | null;
-  style?: string;
-  speed?: number;
-  pitch?: string;
-  projectName?: string;
-}) {
-  const res = await fetch('/api/tts/generate-full', {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || 'Échec de la génération audio');
   }
   return res.json();
 }

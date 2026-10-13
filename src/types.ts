@@ -1,3 +1,5 @@
+export type TabType = 'tts' | 'my-voice' | 'creations' | 'quotas' | 'api-key' | 'settings';
+
 export interface Voice {
   id: string;
   name: string;
@@ -38,6 +40,7 @@ export interface VoiceAnalysisResult {
   recommendedBaseVoice: 'Kore' | 'Puck' | 'Charon' | 'Fenrir' | 'Zephyr';
   recommendedStylePrompt: string;
   accent: string;
+  isInstantCalibrated?: boolean;
 }
 
 export interface VoicePreset {
@@ -61,6 +64,21 @@ export interface GenerationSegment {
   status: 'pending' | 'generating' | 'completed' | 'failed';
   retries?: number;
   error?: string;
+}
+
+export interface TTSJobState {
+  jobId: string;
+  projectName: string;
+  scriptText: string;
+  voiceName: string;
+  customVoiceId?: string | null;
+  style?: string;
+  speed: number;
+  pitch: string;
+  segments: GenerationSegment[];
+  createdAt: string;
+  updatedAt: string;
+  isCompleted: boolean;
 }
 
 export interface SavedCreation {
@@ -112,17 +130,27 @@ export interface QuotaLogEntry {
 }
 
 export interface QuotaStatus {
-  dailyRequestsUsed: number;
-  dailyRequestsLimit: number;
-  requestsRemainingEstimated: number;
+  // 1. Observed by Marius Voice AI
+  observedRequestsToday: number;
+  successfulRequestsToday: number;
+  failedRequestsToday: number;
+  completedSegmentsToday: number;
   totalCharactersToday: number;
   tokensConsumedToday: number;
-  rateLimitStatus: 'normal' | 'rate_limited' | 'quota_exhausted';
+
+  // 2. Confirmed by Google (null when not exposed through API)
+  googleConfirmedLimit: number | null;
+  googleRemainingCapacity: number | null;
+  googleStatusExplanation: string;
+
+  // 3. Rate limit & Status
+  rateLimitStatus: 'normal' | 'rate_limited' | 'quota_exhausted' | 'server_spike_503' | 'unknown';
   lastRateLimitMessage?: string;
-  resetTimeBenin: string;
-  resetTimeLocal: string;
-  timeUntilReset: string;
-  isVerifiedFromGoogle: boolean;
+  retryAfterSeconds?: number;
+  retryAvailableAt?: string;
+  resetTargetTimeFormatted?: string;
+  resetTargetType: 'confirmed_retry_after' | 'estimated_daily' | 'unknown';
+
   lastUpdated: string;
   sourceLabel: string;
   history: QuotaLogEntry[];

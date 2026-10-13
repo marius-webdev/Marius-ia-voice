@@ -4,12 +4,14 @@ import { TextToSpeechWorkspace } from './components/TextToSpeechWorkspace.tsx';
 import { MyVoiceStudio } from './components/MyVoiceStudio.tsx';
 import { CreationsLibrary } from './components/CreationsLibrary.tsx';
 import { UsageStatsView } from './components/UsageStatsView.tsx';
+import { ApiKeySettingsView } from './components/ApiKeySettingsView.tsx';
+import { QuotaDashboardView } from './components/QuotaDashboardView.tsx';
 import { MobileInstallModal } from './components/MobileInstallModal.tsx';
-import { CustomVoiceProfile, SavedCreation, UserStats, Voice } from './types.ts';
+import { CustomVoiceProfile, SavedCreation, TabType, UserStats, Voice } from './types.ts';
 import { getCreations, getCustomVoices, getVoices } from './services/api.ts';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'tts' | 'my-voice' | 'creations' | 'settings'>('tts');
+  const [activeTab, setActiveTab] = useState<TabType>('tts');
   const [isMobileInstallOpen, setIsMobileInstallOpen] = useState(false);
 
   // State
@@ -169,6 +171,8 @@ export default function App() {
                 initialVoiceId={editorVoiceId}
                 onGenerationComplete={handleCreationComplete}
                 onNavigateToMyVoice={() => setActiveTab('my-voice')}
+                onNavigateToApiKey={() => setActiveTab('api-key')}
+                onNavigateToQuotas={() => setActiveTab('quotas')}
               />
             )}
 
@@ -186,6 +190,21 @@ export default function App() {
                 creations={creations}
                 onDeleteSuccess={handleCreationDeleted}
                 onOpenInEditor={handleOpenCreationInEditor}
+              />
+            )}
+
+            {activeTab === 'quotas' && (
+              <QuotaDashboardView
+                onNavigateToApiKey={() => setActiveTab('api-key')}
+                onNavigateToTTS={() => setActiveTab('tts')}
+              />
+            )}
+
+            {activeTab === 'api-key' && (
+              <ApiKeySettingsView
+                onKeyConfigured={() => setActiveTab('tts')}
+                onNavigateToTTS={() => setActiveTab('tts')}
+                onNavigateToQuotas={() => setActiveTab('quotas')}
               />
             )}
 
@@ -209,13 +228,32 @@ export default function App() {
       {/* Footer */}
       <footer className="border-t border-white/5 py-6 px-4 text-center text-xs text-gray-500 hidden md:block">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
-          <p>© {new Date().getFullYear()} Marius Voice AI — Moteur audio gemini-3.8-flash-tts 24kHz Studio</p>
+          <div>
+            <span className="font-semibold text-gray-400">Marius Voice AI</span> • Studio Professionnel de Synthèse Vocale & Voice Design
+          </div>
           <div className="flex items-center gap-4 text-gray-400">
-            <span>Synthèse Vocale Longue Durée</span>
+            <button
+              onClick={() => setActiveTab('api-key')}
+              className="hover:text-purple-300 transition-colors cursor-pointer"
+            >
+              Ma clé API Google
+            </button>
             <span>•</span>
-            <span>Clonage Éthique</span>
+            <button
+              onClick={() => setActiveTab('quotas')}
+              className="hover:text-purple-300 transition-colors cursor-pointer"
+            >
+              Quotas & Conso
+            </button>
             <span>•</span>
-            <span>Exports WAV & MP3</span>
+            <a
+              href="https://aistudio.google.com/apikey"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-purple-300 transition-colors"
+            >
+              Google AI Studio
+            </a>
           </div>
         </div>
       </footer>

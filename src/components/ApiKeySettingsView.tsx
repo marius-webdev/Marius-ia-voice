@@ -33,7 +33,6 @@ export const ApiKeySettingsView: React.FC<ApiKeySettingsViewProps> = ({
 }) => {
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [showKey, setShowKey] = useState(false);
-  const [isPersistLocally, setIsPersistLocally] = useState(true);
 
   // Status state
   const [isSaved, setIsSaved] = useState(() => apiKeyManager.hasKey());
@@ -97,14 +96,14 @@ export const ApiKeySettingsView: React.FC<ApiKeySettingsViewProps> = ({
       return;
     }
 
-    apiKeyManager.saveApiKey(cleanKey, isPersistLocally);
+    apiKeyManager.saveApiKey(cleanKey);
     setIsSaved(true);
     setMaskedKey(apiKeyManager.getMaskedKey());
     setApiKeyInput('');
     setIsEditingNewKey(false);
     setTestResult({
       success: true,
-      message: 'Votre clé API a été enregistrée avec succès pour cette session.',
+      message: 'Votre clé API a été enregistrée avec succès en session sécurisée.',
     });
     if (onKeyConfigured) onKeyConfigured();
   };
@@ -139,13 +138,13 @@ export const ApiKeySettingsView: React.FC<ApiKeySettingsViewProps> = ({
       <div>
         <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-purple-400 mb-1">
           <Key className="w-4 h-4 text-purple-400" />
-          Sécurité & Authentification Personnelle
+          Sécurité & Clé Personnelle
         </div>
         <h1 className="text-2xl sm:text-3xl font-extrabold text-white">
           Ma clé API Google
         </h1>
         <p className="text-sm text-gray-400 mt-1">
-          Configurez votre propre clé Google AI Studio pour générer vos voix en direct, éliminer les restrictions de partage et suivre précisément votre consommation.
+          Configurez votre clé personnelle Google AI Studio. Marius Voice AI utilise exclusivement votre clé configurée, sans clé partagée ni fallback développeur.
         </p>
       </div>
 
@@ -155,11 +154,13 @@ export const ApiKeySettingsView: React.FC<ApiKeySettingsViewProps> = ({
 
         <div className="flex flex-wrap items-center justify-between gap-4 pb-6 border-b border-white/5">
           <div className="flex items-center gap-3">
-            <div className={`w-11 h-11 rounded-2xl flex items-center justify-center ${
-              isSaved
-                ? 'bg-emerald-950/60 border border-emerald-500/40 text-emerald-400'
-                : 'bg-amber-950/60 border border-amber-500/40 text-amber-400'
-            }`}>
+            <div
+              className={`w-11 h-11 rounded-2xl flex items-center justify-center ${
+                isSaved
+                  ? 'bg-emerald-950/60 border border-emerald-500/40 text-emerald-400'
+                  : 'bg-amber-950/60 border border-amber-500/40 text-amber-400'
+              }`}
+            >
               <ShieldCheck className="w-6 h-6" />
             </div>
             <div>
@@ -179,7 +180,7 @@ export const ApiKeySettingsView: React.FC<ApiKeySettingsViewProps> = ({
               </div>
               <p className="text-xs text-gray-400 mt-0.5">
                 {isSaved
-                  ? 'Votre studio Marius Voice AI utilise votre clé privée pour toutes les synthèses vocales.'
+                  ? 'Votre studio Marius Voice AI utilise votre clé personnelle pour toutes les synthèses vocales.'
                   : 'Veuillez renseigner votre clé personnelle Google Gemini ci-dessous.'}
               </p>
             </div>
@@ -200,14 +201,16 @@ export const ApiKeySettingsView: React.FC<ApiKeySettingsViewProps> = ({
         {isSaved && !isEditingNewKey ? (
           <div className="py-6 space-y-4">
             <div className="p-4 rounded-2xl bg-[#090b14] border border-white/5 space-y-2">
-              <span className="text-xs text-gray-400 block font-medium">Clé API enregistrée (masquée pour votre sécurité)</span>
+              <span className="text-xs text-gray-400 block font-medium">
+                Clé API active (masquée pour votre sécurité)
+              </span>
               <div className="flex items-center justify-between gap-3">
                 <span className="font-mono text-sm sm:text-base text-purple-200 tracking-wider">
                   {maskedKey || 'AIzaSy••••••••••••••••••••••••'}
                 </span>
                 <span className="text-[11px] text-gray-500 flex items-center gap-1">
                   <Lock className="w-3 h-3 text-emerald-400" />
-                  Sécurisé
+                  Session active
                 </span>
               </div>
             </div>
@@ -246,7 +249,7 @@ export const ApiKeySettingsView: React.FC<ApiKeySettingsViewProps> = ({
           <div className="py-6 space-y-5">
             <div>
               <label className="block text-xs font-semibold text-gray-300 mb-2">
-                Entrez votre clé API Google Gemini (commence généralement par AIzaSy...)
+                Entrez votre clé API Google Gemini (commence par AIzaSy...)
               </label>
               <div className="relative">
                 <input
@@ -269,21 +272,8 @@ export const ApiKeySettingsView: React.FC<ApiKeySettingsViewProps> = ({
               </div>
               <p className="text-[11px] text-gray-500 mt-2 flex items-center gap-1.5">
                 <Lock className="w-3 h-3 text-purple-400" />
-                La clé reste stockée localement dans votre navigateur et n'est jamais exposée ni partagée publiquement.
+                Stockage sécurisé en session navigateur (sessionStorage). La clé n'est jamais enregistrée en texte clair de manière permanente ni partagée.
               </p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="persistLocal"
-                checked={isPersistLocally}
-                onChange={(e) => setIsPersistLocally(e.target.checked)}
-                className="rounded border-white/10 bg-[#090b14] text-purple-600 focus:ring-purple-500 w-4 h-4"
-              />
-              <label htmlFor="persistLocal" className="text-xs text-gray-300 cursor-pointer">
-                Mémoriser ma clé sur cet appareil (recommandé pour ne pas avoir à la ressaisir)
-              </label>
             </div>
 
             <div className="flex flex-wrap items-center gap-3 pt-2">
@@ -311,7 +301,7 @@ export const ApiKeySettingsView: React.FC<ApiKeySettingsViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsEditingNewKey(false)}
-                  className="px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white text-xs font-semibold transition-all ml-auto cursor-pointer"
+                  className="px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-gray-400 text-xs font-semibold cursor-pointer"
                 >
                   Annuler
                 </button>
@@ -320,230 +310,144 @@ export const ApiKeySettingsView: React.FC<ApiKeySettingsViewProps> = ({
           </div>
         )}
 
-        {/* Verification / Test Feedback Banner */}
+        {/* Verification / Test Result Feedback Banner */}
         {testResult && (
-          <div className={`mt-4 p-4 rounded-2xl border transition-all ${
-            testResult.success
-              ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-200'
-              : 'bg-red-950/30 border-red-500/30 text-red-200'
-          }`}>
-            <div className="flex items-start gap-3">
+          <div
+            className={`mt-4 p-4 rounded-2xl border text-xs space-y-2 ${
+              testResult.success
+                ? testResult.isQuotaExhausted
+                  ? 'bg-amber-950/40 border-amber-500/40 text-amber-200'
+                  : 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                : 'bg-red-950/40 border-red-500/40 text-red-200'
+            }`}
+          >
+            <div className="flex items-start gap-2.5">
               {testResult.success ? (
-                <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                testResult.isQuotaExhausted ? (
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
+                )
               ) : (
-                <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                <AlertTriangle className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
               )}
-              <div className="space-y-2 flex-1">
-                <div className="text-xs font-bold">
-                  {testResult.success ? 'Vérification réussie' : 'Échec de vérification'}
-                </div>
-                <p className="text-xs leading-relaxed opacity-90">{testResult.message}</p>
-
+              <div className="space-y-1">
+                <p className="font-semibold text-sm">{testResult.message}</p>
                 {testResult.accessibleModels && testResult.accessibleModels.length > 0 && (
                   <div className="pt-2">
-                    <span className="text-[11px] font-semibold text-gray-300 block mb-1">
-                      Modèles validés et disponibles pour ce projet :
+                    <span className="font-semibold text-[11px] block mb-1">
+                      Modèles testés :
                     </span>
-                    <div className="flex flex-wrap gap-1.5">
+                    <ul className="list-disc list-inside space-y-0.5 text-[11px] font-mono opacity-90">
                       {testResult.accessibleModels.map((m, idx) => (
-                        <span
-                          key={idx}
-                          className="px-2 py-0.5 rounded-md bg-white/10 text-[10px] font-mono text-purple-200"
-                        >
-                          {m}
-                        </span>
+                        <li key={idx}>{m}</li>
                       ))}
-                    </div>
-                  </div>
-                )}
-
-                {testResult.success && onNavigateToTTS && (
-                  <div className="pt-2 flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={onNavigateToTTS}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all cursor-pointer shadow-sm"
-                    >
-                      Aller à la Synthèse Vocale →
-                    </button>
-                    {onNavigateToQuotas && (
-                      <button
-                        type="button"
-                        onClick={onNavigateToQuotas}
-                        className="text-xs text-purple-300 underline hover:text-white"
-                      >
-                        Consulter mes quotas
-                      </button>
-                    )}
+                    </ul>
                   </div>
                 )}
               </div>
             </div>
+
+            {testResult.success && onNavigateToTTS && (
+              <div className="pt-2 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={onNavigateToTTS}
+                  className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold cursor-pointer transition-colors"
+                >
+                  Commencer une synthèse vocale →
+                </button>
+                {onNavigateToQuotas && (
+                  <button
+                    type="button"
+                    onClick={onNavigateToQuotas}
+                    className="text-purple-300 hover:text-purple-200 underline text-xs cursor-pointer"
+                  >
+                    Voir mon tableau de bord quotas
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* SECTION: French API Key Setup Tutorial */}
-      <div className="bg-[#101322] rounded-3xl border border-white/5 p-6 sm:p-8 shadow-xl space-y-6">
+      {/* Guide: How to obtain a Google Gemini API Key */}
+      <div className="bg-[#101322] rounded-3xl border border-white/5 p-6 sm:p-8 space-y-6 shadow-xl">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400">
-            <HelpCircle className="w-5 h-5" />
+          <div className="w-10 h-10 rounded-2xl bg-purple-600/10 border border-purple-500/30 text-purple-400 flex items-center justify-center">
+            <Sparkles className="w-5 h-5" />
           </div>
           <div>
             <h2 className="text-base sm:text-lg font-bold text-white">
-              Guide pas-à-pas : Obtenir votre clé Google AI Studio
+              Guide pas-à-pas : Obtenir votre clé API Google Gemini
             </h2>
             <p className="text-xs text-gray-400">
-              Procédure gratuite et rapide en 8 étapes pour configurer votre accès.
+              Gratuit, sans carte bancaire obligatoire pour débuter, en moins de 2 minutes.
             </p>
           </div>
         </div>
 
-        <ol className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-          {[
-            {
-              step: '1',
-              title: 'Ouvrir Google AI Studio',
-              desc: 'Accédez à la plateforme officielle des développeurs Google pour les modèles Gemini.',
-            },
-            {
-              step: '2',
-              title: 'Connexion Google',
-              desc: 'Connectez-vous avec votre compte Google personnel ou professionnel habituel.',
-            },
-            {
-              step: '3',
-              title: 'Accéder aux clés d\'API',
-              desc: 'Ouvrez directement la page dédiée : https://aistudio.google.com/apikey',
-              hasLink: true,
-            },
-            {
-              step: '4',
-              title: 'Créer une clé API',
-              desc: 'Cliquez sur "Create API key" et sélectionnez votre projet Google Cloud (ou créez-en un nouveau en 1 clic).',
-            },
-            {
-              step: '5',
-              title: 'Copier la clé générée',
-              desc: 'Copiez la clé confidentielle (celle-ci commence généralement par AIzaSy...).',
-            },
-            {
-              step: '6',
-              title: 'Revenir sur Marius Voice AI',
-              desc: 'Retournez sur cet onglet de configuration dans votre studio.',
-            },
-            {
-              step: '7',
-              title: 'Coller dans le champ',
-              desc: 'Collez la clé dans le champ ci-dessus "Entrez votre clé API Google Gemini".',
-            },
-            {
-              step: '8',
-              title: 'Tester puis enregistrer',
-              desc: 'Cliquez sur "Tester ma clé". Une fois le test réussi, cliquez sur "Enregistrer ma clé".',
-            },
-          ].map((item) => (
-            <li
-              key={item.step}
-              className="bg-[#090b14] p-3.5 rounded-2xl border border-white/5 flex items-start gap-3"
-            >
-              <div className="w-6 h-6 rounded-lg bg-purple-600/20 text-purple-300 font-bold flex items-center justify-center shrink-0 text-xs">
-                {item.step}
-              </div>
-              <div className="space-y-1">
-                <div className="font-semibold text-white">{item.title}</div>
-                <div className="text-gray-400 text-[11px] leading-relaxed">{item.desc}</div>
-                {item.hasLink && (
-                  <button
-                    type="button"
-                    onClick={copyStudioUrl}
-                    className="inline-flex items-center gap-1 text-[10px] text-purple-400 hover:text-purple-300 underline pt-1 cursor-pointer"
-                  >
-                    {copiedLink ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                    <span>{copiedLink ? 'Lien copié !' : 'Copier l\'adresse AI Studio'}</span>
-                  </button>
-                )}
-              </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="p-4 rounded-2xl bg-[#090b14] border border-white/5 space-y-2">
+            <span className="w-6 h-6 rounded-lg bg-purple-600/30 text-purple-300 font-bold text-xs flex items-center justify-center">
+              1
+            </span>
+            <h3 className="text-xs font-bold text-white">Accédez à Google AI Studio</h3>
+            <p className="text-[11px] text-gray-400 leading-relaxed">
+              Ouvrez la console officielle des développeurs Google AI Studio avec votre compte Google standard.
+            </p>
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={copyStudioUrl}
+                className="flex items-center gap-1.5 text-[11px] text-purple-400 hover:text-purple-300 font-mono cursor-pointer"
+              >
+                {copiedLink ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                <span>{copiedLink ? 'Lien copié !' : 'Copier l\'adresse'}</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-[#090b14] border border-white/5 space-y-2">
+            <span className="w-6 h-6 rounded-lg bg-purple-600/30 text-purple-300 font-bold text-xs flex items-center justify-center">
+              2
+            </span>
+            <h3 className="text-xs font-bold text-white">Générez votre clé API</h3>
+            <p className="text-[11px] text-gray-400 leading-relaxed">
+              Cliquez sur le bouton bleu « <strong>Create API Key</strong> » (Créer une clé API). Choisissez un projet Google Cloud ou laissez Google en créer un automatiquement.
+            </p>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-[#090b14] border border-white/5 space-y-2">
+            <span className="w-6 h-6 rounded-lg bg-purple-600/30 text-purple-300 font-bold text-xs flex items-center justify-center">
+              3
+            </span>
+            <h3 className="text-xs font-bold text-white">Collez la clé ici</h3>
+            <p className="text-[11px] text-gray-400 leading-relaxed">
+              Copiez la chaîne de caractères (qui commence par <code>AIzaSy...</code>) et collez-la dans le champ ci-dessus, puis cliquez sur « Enregistrer ma clé ».
+            </p>
+          </div>
+        </div>
+
+        {/* Important clarifications */}
+        <div className="p-4 rounded-2xl bg-purple-950/20 border border-purple-500/20 text-xs text-purple-200 space-y-2">
+          <div className="font-bold flex items-center gap-2 text-purple-300">
+            <Info className="w-4 h-4 text-purple-400 shrink-0" />
+            Règles de quotas Google importantes :
+          </div>
+          <ul className="list-disc list-inside space-y-1 text-[11px] text-gray-300">
+            <li>
+              <strong>Quotas par projet :</strong> Si vous créez plusieurs clés API au sein du même projet Google Cloud, elles partagent toutes le même pool de quota. Créer plusieurs clés ne multiplie pas le quota gratuit.
             </li>
-          ))}
-        </ol>
-      </div>
-
-      {/* SECTION: Official Documentation Links */}
-      <div className="bg-[#101322] rounded-3xl border border-white/5 p-6 shadow-xl space-y-4">
-        <h3 className="text-sm font-bold text-white flex items-center gap-2">
-          <ExternalLink className="w-4 h-4 text-purple-400" />
-          Documentations officielles Google Gemini
-        </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-          <a
-            href="https://ai.google.dev/gemini-api/docs/rate-limits"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="p-3 rounded-xl bg-[#090b14] border border-white/5 hover:border-purple-500/40 transition-all flex flex-col justify-between group"
-          >
-            <div>
-              <span className="font-bold text-white group-hover:text-purple-300 transition-colors">
-                Limites de Fréquence
-              </span>
-              <p className="text-[11px] text-gray-400 mt-1">
-                Quotas RPM (requêtes/min) et RPD (requêtes/jour) par modèle.
-              </p>
-            </div>
-            <span className="text-[10px] text-purple-400 mt-3 inline-flex items-center gap-1">
-              Consulter <ExternalLink className="w-2.5 h-2.5" />
-            </span>
-          </a>
-
-          <a
-            href="https://ai.google.dev/gemini-api/docs/pricing"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="p-3 rounded-xl bg-[#090b14] border border-white/5 hover:border-purple-500/40 transition-all flex flex-col justify-between group"
-          >
-            <div>
-              <span className="font-bold text-white group-hover:text-purple-300 transition-colors">
-                Grille Tarifaire
-              </span>
-              <p className="text-[11px] text-gray-400 mt-1">
-                Détails du palier gratuit et coût par million de jetons audio.
-              </p>
-            </div>
-            <span className="text-[10px] text-purple-400 mt-3 inline-flex items-center gap-1">
-              Consulter <ExternalLink className="w-2.5 h-2.5" />
-            </span>
-          </a>
-
-          <a
-            href="https://ai.google.dev/gemini-api/docs/speech-generation"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="p-3 rounded-xl bg-[#090b14] border border-white/5 hover:border-purple-500/40 transition-all flex flex-col justify-between group"
-          >
-            <div>
-              <span className="font-bold text-white group-hover:text-purple-300 transition-colors">
-                Synthèse Vocale (TTS)
-              </span>
-              <p className="text-[11px] text-gray-400 mt-1">
-                Spécifications audio 24kHz et tags vocaux pris en charge.
-              </p>
-            </div>
-            <span className="text-[10px] text-purple-400 mt-3 inline-flex items-center gap-1">
-              Consulter <ExternalLink className="w-2.5 h-2.5" />
-            </span>
-          </a>
+            <li>
+              <strong>Plafonds gratuits :</strong> L'accès gratuit de Google AI Studio est soumis à des limites de fréquence (RPM) et à des quotas quotidiens (RPD).
+            </li>
+            <li>
+              <strong>Passage au Pay-as-you-go :</strong> Pour les scripts volumineux sans restrictions de requêtes par minute, vous pouvez lier un compte de facturation Google Cloud à votre projet sur AI Studio.
+            </li>
+          </ul>
         </div>
-      </div>
-
-      {/* MANDATORY OFFICIAL FRENCH NOTICE */}
-      <div className="bg-purple-950/20 border border-purple-500/30 rounded-2xl p-5 text-xs text-purple-200/90 leading-relaxed shadow-lg">
-        <div className="flex items-center gap-2 font-bold text-purple-300 mb-1.5">
-          <Info className="w-4 h-4 text-purple-400 shrink-0" />
-          Notice Légale et Conditions d'Accès aux Services Google
-        </div>
-        <p className="italic">
-          « Google peut proposer un accès gratuit dans certaines limites. Les quotas dépendent du projet, du modèle, du niveau d'accès et des conditions de Google. Certaines fonctionnalités peuvent nécessiter une facturation. Marius Voice AI ne garantit pas un accès illimité ni la gratuité permanente. »
-        </p>
       </div>
     </div>
   );

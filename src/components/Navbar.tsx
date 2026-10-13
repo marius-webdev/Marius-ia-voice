@@ -65,7 +65,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-gray-400 hidden sm:block">
-                Synthèse Vocale HD & Clonage de Voix Personnalisé
+                Synthèse Vocale HD & Voice Design Personnalisé
               </p>
             </div>
           </div>
@@ -206,22 +206,22 @@ export const Navbar: React.FC<NavbarProps> = ({
 
       {/* Bottom Navigation for Mobile Devices */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-[#0a0c14]/95 backdrop-blur-lg border-t border-white/10 px-2 py-1 shadow-2xl">
-        <div className="grid grid-cols-5 gap-1 max-w-md mx-auto">
+        <div className="grid grid-cols-6 gap-0.5 max-w-md mx-auto">
           <button
             onClick={() => setActiveTab('tts')}
-            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
+            className={`flex flex-col items-center justify-center py-1.5 px-0.5 rounded-xl transition-all cursor-pointer ${
               activeTab === 'tts'
                 ? 'text-purple-400 font-semibold bg-purple-500/15'
                 : 'text-gray-400 hover:text-gray-200'
             }`}
           >
             <Volume2 className="w-4 h-4 mb-0.5" />
-            <span className="text-[10px] leading-tight">Synthèse</span>
+            <span className="text-[9px] leading-tight">Synthèse</span>
           </button>
 
           <button
             onClick={() => setActiveTab('my-voice')}
-            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all relative cursor-pointer ${
+            className={`flex flex-col items-center justify-center py-1.5 px-0.5 rounded-xl transition-all relative cursor-pointer ${
               activeTab === 'my-voice'
                 ? 'text-purple-400 font-semibold bg-purple-500/15'
                 : 'text-gray-400 hover:text-gray-200'
@@ -235,12 +235,12 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </span>
               )}
             </div>
-            <span className="text-[10px] leading-tight">Ma Voix</span>
+            <span className="text-[9px] leading-tight">Ma Voix</span>
           </button>
 
           <button
             onClick={() => setActiveTab('creations')}
-            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all relative cursor-pointer ${
+            className={`flex flex-col items-center justify-center py-1.5 px-0.5 rounded-xl transition-all relative cursor-pointer ${
               activeTab === 'creations'
                 ? 'text-purple-400 font-semibold bg-purple-500/15'
                 : 'text-gray-400 hover:text-gray-200'
@@ -254,24 +254,24 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </span>
               )}
             </div>
-            <span className="text-[10px] leading-tight">Créations</span>
+            <span className="text-[9px] leading-tight">Projets</span>
           </button>
 
           <button
             onClick={() => setActiveTab('quotas')}
-            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
+            className={`flex flex-col items-center justify-center py-1.5 px-0.5 rounded-xl transition-all cursor-pointer ${
               activeTab === 'quotas'
                 ? 'text-purple-400 font-semibold bg-purple-500/15'
                 : 'text-gray-400 hover:text-gray-200'
             }`}
           >
             <Gauge className="w-4 h-4 mb-0.5" />
-            <span className="text-[10px] leading-tight">Quotas</span>
+            <span className="text-[9px] leading-tight">Quotas</span>
           </button>
 
           <button
             onClick={() => setActiveTab('api-key')}
-            className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all relative cursor-pointer ${
+            className={`flex flex-col items-center justify-center py-1.5 px-0.5 rounded-xl transition-all relative cursor-pointer ${
               activeTab === 'api-key'
                 ? 'text-purple-400 font-semibold bg-purple-500/15'
                 : 'text-gray-400 hover:text-gray-200'
@@ -281,7 +281,19 @@ export const Navbar: React.FC<NavbarProps> = ({
               <Key className="w-4 h-4 mb-0.5" />
               <span className={`absolute -top-0.5 -right-1 w-2 h-2 rounded-full ${hasApiKey ? 'bg-emerald-400' : 'bg-amber-400'}`} />
             </div>
-            <span className="text-[10px] leading-tight">Clé API</span>
+            <span className="text-[9px] leading-tight">Clé API</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('settings')}
+            className={`flex flex-col items-center justify-center py-1.5 px-0.5 rounded-xl transition-all cursor-pointer ${
+              activeTab === 'settings'
+                ? 'text-purple-400 font-semibold bg-purple-500/15'
+                : 'text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            <Sliders className="w-4 h-4 mb-0.5" />
+            <span className="text-[9px] leading-tight">Réglages</span>
           </button>
         </div>
       </nav>

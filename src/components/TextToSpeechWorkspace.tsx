@@ -102,6 +102,25 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
     localStorage.setItem('marius_tts_draft', scriptText);
   }, [scriptText]);
 
+  // Restore incomplete multi-segment job from previous session if available
+  useEffect(() => {
+    try {
+      const savedJob = localStorage.getItem('marius_active_tts_job');
+      if (savedJob) {
+        const parsed = JSON.parse(savedJob);
+        if (parsed.segments && parsed.segments.length > 0 && !parsed.isCompleted) {
+          setSegments(parsed.segments);
+          if (parsed.scriptText) setScriptText(parsed.scriptText);
+          if (parsed.projectName) setProjectName(parsed.projectName);
+          if (parsed.voiceName) setSelectedVoiceId(parsed.voiceName);
+          setIsPaused(true);
+          const completedCount = parsed.segments.filter((s: any) => s.status === 'completed').length;
+          setGenerationStep(`Projet en cours restauré : ${completedCount}/${parsed.segments.length} segments déjà prêts.`);
+        }
+      }
+    } catch {}
+  }, []);
+
   // Sync initial text if passed from outside
   useEffect(() => {
     if (initialText) {
@@ -112,7 +131,6 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
   // Sync initial voice if passed
   useEffect(() => {
     if (initialVoiceId) {
-      // Check if it's custom or studio
       const isCustom = customVoices.some((v) => v.id === initialVoiceId);
       if (isCustom) {
         setVoiceCategory('custom');
@@ -365,9 +383,17 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
             lastError = err;
             const errMsg = err?.message || String(err);
 
-            // Permanent errors: do not retry
-            const isInvalidKey = errMsg.includes('clé API') || errMsg.includes('API_KEY_INVALID') || errMsg.includes('401') || errMsg.includes('403');
-            const isQuotaExhausted = errMsg.includes('Quota quotidien') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('10 requêtes par jour');
+            // Permanent errors: do not retry indefinitely
+            const isInvalidKey =
+              errMsg.includes('clé API') ||
+              errMsg.includes('API_KEY_INVALID') ||
+              errMsg.includes('401') ||
+              errMsg.includes('403') ||
+              err?.errorType === 'AUTH_ERROR';
+            const isQuotaExhausted =
+              errMsg.includes('Quota de requêtes') ||
+              errMsg.includes('RESOURCE_EXHAUSTED') ||
+              err?.errorType === 'DAILY_QUOTA_429';
 
             if (isInvalidKey || isQuotaExhausted) {
               currentSegments[i] = {
@@ -380,22 +406,40 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
               setIsPaused(true);
               setRetryInfo(null);
               setErrorNotice(errMsg);
+
+              // Persist current job progress so far
+              try {
+                localStorage.setItem(
+                  'marius_active_tts_job',
+                  JSON.stringify({
+                    projectName,
+                    scriptText,
+                    voiceName: activeVoice,
+                    segments: currentSegments,
+                    isCompleted: false,
+                    updatedAt: new Date().toISOString(),
+                  })
+                );
+              } catch {}
               return;
             }
 
-            // Transient error (503 high demand or 429 rate limit): apply backoff with jitter
+            // Transient error (503 high demand or 429 rate limit): apply backoff with jitter or Retry-After
             if (attempt < maxAttempts && !abortRequestedRef.current) {
-              // Exponential backoff base with random jitter (200ms - 800ms)
               const baseBackoff = Math.round(1500 * Math.pow(1.6, attempt - 1));
               const jitter = Math.floor(Math.random() * 600);
-              const waitDuration = baseBackoff + jitter;
+              const retryAfter = err?.retryAfterSeconds;
+              const waitDuration = retryAfter ? retryAfter * 1000 : baseBackoff + jitter;
 
-              // Live countdown in UI
               const countdownSecs = Math.ceil(waitDuration / 1000);
               for (let c = countdownSecs; c > 0; c--) {
                 if (abortRequestedRef.current) break;
                 setRetryInfo({ attempt: attempt + 1, maxAttempts, countdown: c });
-                setGenerationStep(`Forte demande serveur (503/429). Nouvel essai dans ${c}s (tentative ${attempt + 1}/${maxAttempts})...`);
+                setGenerationStep(
+                  retryAfter
+                    ? `Délai Google Retry-After. Nouvel essai dans ${c}s (tentative ${attempt + 1}/${maxAttempts})...`
+                    : `Forte demande serveur (503/429). Nouvel essai dans ${c}s (tentative ${attempt + 1}/${maxAttempts})...`
+                );
                 await new Promise((r) => setTimeout(r, 1000));
               }
               setRetryInfo(null);
@@ -413,11 +457,26 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
           currentSegments[i] = {
             ...currentSegments[i],
             status: 'failed',
-            error: lastError?.message || 'Échec de génération du segment après 5 tentatives.',
+            error: lastError?.message || 'Échec de génération du segment après plusieurs tentatives.',
           };
           setSegments([...currentSegments]);
           setIsGenerating(false);
           setIsPaused(true);
+
+          try {
+            localStorage.setItem(
+              'marius_active_tts_job',
+              JSON.stringify({
+                projectName,
+                scriptText,
+                voiceName: activeVoice,
+                segments: currentSegments,
+                isCompleted: false,
+                updatedAt: new Date().toISOString(),
+              })
+            );
+          } catch {}
+
           throw new Error(`Échec sur le segment ${i + 1}/${totalSegments} : ${lastError?.message || 'Erreur inconnue'}`);
         }
 
@@ -466,6 +525,9 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
         setGenerationProgress(100);
         setGenerationStep('Génération terminée avec succès !');
         setIsPaused(false);
+        try {
+          localStorage.removeItem('marius_active_tts_job');
+        } catch {}
       }
     } catch (err: any) {
       console.error('Generation error:', err);
@@ -475,6 +537,84 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
     } finally {
       setIsGenerating(false);
       setRetryInfo(null);
+    }
+  };
+
+  // Dedicated single-segment retry handler
+  const handleRetrySingleSegment = async (segIndex: number) => {
+    const segIdx = segments.findIndex((s) => s.index === segIndex);
+    if (segIdx === -1) return;
+
+    const targetSeg = segments[segIdx];
+    const isCustomVoice = voiceCategory === 'custom';
+    const customProfile = isCustomVoice ? customVoices.find((v) => v.id === selectedVoiceId) : null;
+    const activeVoice = customProfile ? customProfile.baseVoice || 'Kore' : selectedVoiceId;
+    const enrichedStyle = customProfile ? `${customProfile.stylePrompt}. ${customStyle}`.trim() : customStyle;
+
+    const updated = [...segments];
+    updated[segIdx] = { ...targetSeg, status: 'generating', error: undefined };
+    setSegments(updated);
+    setErrorNotice(null);
+
+    try {
+      const res = await generateSingleSegment({
+        text: targetSeg.text,
+        voiceName: activeVoice,
+        style: enrichedStyle,
+        speed: speechSpeed,
+        pitch: voicePitch,
+      });
+
+      if (res.audioBase64) {
+        updated[segIdx] = {
+          ...targetSeg,
+          status: 'completed',
+          audioBase64: res.audioBase64,
+          duration: res.duration,
+          byteSize: res.byteSize,
+          error: undefined,
+        };
+        setSegments(updated);
+
+        // If all segments are now completed, offer to concatenate
+        if (updated.every((s) => s.status === 'completed' && s.audioBase64)) {
+          const allB64s = updated.map((s) => s.audioBase64 as string);
+          const concatRes = await concatenateAudioSegments({
+            segmentBase64s: allB64s,
+            projectName,
+            text: scriptText,
+            voiceName: activeVoice,
+            customVoiceId: isCustomVoice ? selectedVoiceId : null,
+            style: enrichedStyle,
+            speed: speechSpeed,
+            pitch: voicePitch,
+          });
+
+          if (concatRes.success) {
+            setGeneratedWav(concatRes.wavBase64);
+            setGeneratedDuration(concatRes.duration);
+            setGeneratedSegments(updated);
+            onGenerationComplete({
+              creationId: concatRes.creationId,
+              text: scriptText,
+              voiceName: activeVoice,
+              duration: concatRes.duration,
+            });
+            try {
+              localStorage.removeItem('marius_active_tts_job');
+            } catch {}
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error('Segment retry error:', err);
+      updated[segIdx] = {
+        ...targetSeg,
+        status: 'failed',
+        error: err.message || 'Échec lors de la réévaluation de ce segment.',
+      };
+      setSegments(updated);
+      setErrorNotice(err.message || 'Échec lors du réessai du segment.');
     }
   };
 
@@ -1147,6 +1287,19 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
                     {seg.status === 'failed' && <AlertCircle className="w-3 h-3 text-red-400" />}
                     {seg.duration && (
                       <span className="opacity-80">({seg.duration.toFixed(1)}s)</span>
+                    )}
+                    {seg.status === 'failed' && !isGenerating && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRetrySingleSegment(seg.index);
+                        }}
+                        className="ml-1 px-1.5 py-0.5 rounded bg-red-800/80 hover:bg-red-700 text-white text-[9px] font-sans font-bold cursor-pointer transition-colors"
+                        title="Réessayer ce segment individuellement"
+                      >
+                        Réessayer
+                      </button>
                     )}
                   </div>
                 ))}

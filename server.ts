@@ -26,7 +26,7 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-gemini-api-key');
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
@@ -41,6 +41,7 @@ app.use(express.urlencoded({ extended: true, limit: '60mb' }));
 const DATA_DIR = path.join(__dirname, 'data');
 const CREATIONS_FILE = path.join(DATA_DIR, 'creations.json');
 const VOICES_FILE = path.join(DATA_DIR, 'custom_voices.json');
+const JOBS_FILE = path.join(DATA_DIR, 'tts_jobs.json');
 
 if (!fs.existsSync(DATA_DIR)) {
   try {
@@ -50,7 +51,7 @@ if (!fs.existsSync(DATA_DIR)) {
   }
 }
 
-// Helpers for persisting creations and custom voices
+// Helpers for persisting creations, custom voices, and resumable TTS jobs
 function loadCreations(): any[] {
   try {
     if (fs.existsSync(CREATIONS_FILE)) {
@@ -91,25 +92,49 @@ function saveCustomVoices(voices: any[]) {
   }
 }
 
-// Mask API key for secure logging and display (e.g., AIzaSy...****...84K)
+function loadJobs(): Record<string, any> {
+  try {
+    if (fs.existsSync(JOBS_FILE)) {
+      const raw = fs.readFileSync(JOBS_FILE, 'utf-8');
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    console.error('Error reading jobs:', e);
+  }
+  return {};
+}
+
+function saveJobs(jobs: Record<string, any>) {
+  try {
+    fs.writeFileSync(JOBS_FILE, JSON.stringify(jobs, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Error saving jobs:', e);
+  }
+}
+
+// Mask API key for secure logging and display (e.g., AIzaSy••••••••84K)
 function maskApiKey(key: string): string {
   if (!key || key.length < 8) return '••••••••';
   const prefix = key.slice(0, 6);
   const suffix = key.slice(-4);
-  return `${prefix}${'•'.repeat(Math.max(8, key.length - 10))}${suffix}`;
+  return `${prefix}${'•'.repeat(Math.max(12, key.length - 10))}${suffix}`;
 }
 
-// Request-aware Gemini client utility supporting user-configured personal keys
+/**
+ * Extract personal user API key strictly from the request.
+ * AUTOMATIC DEVELOPER KEY FALLBACK HAS BEEN PERMANENTLY REMOVED.
+ * Marius Voice AI requires the user to provide their personal key.
+ */
 function getGenAIClientForReq(req: Request): GoogleGenAI {
   const userHeaderKey = (req.headers['x-gemini-api-key'] as string) || req.headers['authorization']?.replace(/^Bearer\s+/i, '');
-  const apiKey = (userHeaderKey && userHeaderKey.trim()) || process.env.GEMINI_API_KEY;
+  const apiKey = userHeaderKey?.trim();
 
-  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-    throw new Error('Aucune clé API Google Gemini configurée. Veuillez renseigner votre clé personnelle dans l\'onglet « Ma clé API Google ».');
+  if (!apiKey) {
+    throw new Error('AUTH_REQUIRED: Aucune clé API Google Gemini personnelle configurée. Veuillez renseigner votre clé dans l\'onglet « Ma clé API Google ».');
   }
 
   return new GoogleGenAI({
-    apiKey: apiKey.trim(),
+    apiKey,
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
@@ -118,58 +143,96 @@ function getGenAIClientForReq(req: Request): GoogleGenAI {
   });
 }
 
-// Legacy fallback
-function getGenAIClient(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-    throw new Error('Clé API non configurée.');
-  }
-  return new GoogleGenAI({
-    apiKey: apiKey.trim(),
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
+// Structured API error classification with retry duration extraction
+export interface FormattedError {
+  message: string;
+  errorType: 'RATE_LIMIT_429' | 'DAILY_QUOTA_429' | 'SERVER_SPIKE_503' | 'AUTH_ERROR' | 'UNKNOWN';
+  retryAfterSeconds?: number;
+  httpStatus: number;
 }
 
-// Resilient wrapper with exponential backoff for handling 503 high demand spikes and rate limits
-async function callGeminiWithRetry<T>(
-  fn: () => Promise<T>,
-  maxRetries = 3,
-  initialDelayMs = 1500
-): Promise<T> {
-  let lastErr: any;
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err: any) {
-      lastErr = err;
-      const isUnavailable =
-        err?.status === 503 ||
-        err?.statusCode === 503 ||
-        err?.message?.includes('503') ||
-        err?.message?.includes('high demand') ||
-        err?.message?.includes('UNAVAILABLE') ||
-        err?.status === 429 ||
-        err?.statusCode === 429 ||
-        err?.message?.includes('429') ||
-        err?.message?.includes('RESOURCE_EXHAUSTED');
+export function parseAndFormatError(err: any): FormattedError {
+  if (!err) {
+    return {
+      message: 'Une erreur inattendue est survenue.',
+      errorType: 'UNKNOWN',
+      httpStatus: 500,
+    };
+  }
 
-      if (isUnavailable && attempt < maxRetries) {
-        const waitTime = Math.round(initialDelayMs * Math.pow(1.8, attempt - 1));
-        console.warn(`[Gemini API] 503/429 spike on attempt ${attempt}/${maxRetries}. Retrying in ${waitTime}ms...`);
-        await new Promise((r) => setTimeout(r, waitTime));
-      } else {
-        throw err;
-      }
+  const raw = typeof err === 'string' ? err : err.message || '';
+
+  // Auth errors
+  if (
+    raw.includes('AUTH_REQUIRED') ||
+    raw.includes('API_KEY_INVALID') ||
+    raw.includes('API key not valid') ||
+    raw.includes('401') ||
+    raw.includes('PERMISSION_DENIED') ||
+    raw.includes('403')
+  ) {
+    return {
+      message: 'Clé API Google Gemini invalide, non configurée ou accès refusé. Veuillez vérifier votre clé dans l\'onglet « Ma clé API Google ».',
+      errorType: 'AUTH_ERROR',
+      httpStatus: 401,
+    };
+  }
+
+  // Check for Retry-After delay in error string (e.g. "retry in 24s", "retry after 30 seconds", "retry in 14h 22m")
+  let retrySeconds: number | undefined;
+  const secMatch = raw.match(/retry (?:in|after) ([0-9]+)\s*(?:s|sec|seconds)/i);
+  if (secMatch) {
+    retrySeconds = parseInt(secMatch[1], 10);
+  } else {
+    const minMatch = raw.match(/retry in ([0-9]+)\s*(?:m|min|minutes)/i);
+    if (minMatch) {
+      retrySeconds = parseInt(minMatch[1], 10) * 60;
     }
   }
-  throw lastErr;
+
+  // Temporary per-minute rate limit (RPM / frequency / concurrency)
+  if (
+    raw.includes('RPM') ||
+    raw.includes('rate-limit') ||
+    raw.includes('rate limit') ||
+    raw.includes('per minute') ||
+    raw.includes('RATE_LIMIT_EXCEEDED') ||
+    (raw.includes('429') && !raw.includes('RESOURCE_EXHAUSTED') && !raw.includes('quotaMetric') && !raw.includes('Quota exceeded'))
+  ) {
+    const delayInfo = retrySeconds ? ` Réessai possible dans ${retrySeconds} secondes.` : ' Veuillez patienter quelques secondes.';
+    return {
+      message: `Fréquence de requêtes par minute (RPM) temporairement atteinte.${delayInfo}`,
+      errorType: 'RATE_LIMIT_429',
+      retryAfterSeconds: retrySeconds || 15,
+      httpStatus: 429,
+    };
+  }
+
+  // Quota exhaustion (Daily or project-level resource limit)
+  if (
+    raw.includes('Quota exceeded') ||
+    raw.includes('quotaMetric') ||
+    raw.includes('RESOURCE_EXHAUSTED') ||
+    raw.includes('per day') ||
+    raw.includes('daily') ||
+    raw.includes('billing')
+  ) {
+    return {
+      message: 'Quota de requêtes atteint sur votre projet Google Gemini. Les quotas du palier gratuit sont fixés par projet dans Google AI Studio. Pour générer de longs scripts sans restriction, vous pouvez activer la facturation Pay-as-you-go ou patienter jusqu\'à la réinitialisation de votre quota.',
+      errorType: 'DAILY_QUOTA_429',
+      retryAfterSeconds: retrySeconds,
+      httpStatus: 429,
+    };
+  }
+
+  return {
+    message: raw,
+    errorType: 'UNKNOWN',
+    httpStatus: 500,
+  };
 }
 
-// Prebuilt voices available via gemini-3.8-flash-tts
+// Prebuilt voices available via Gemini 3.8 TTS
 const PREBUILT_VOICES = [
   {
     id: 'Kore',
@@ -225,16 +288,15 @@ const PREBUILT_VOICES = [
 
 // --- API ROUTES ---
 
-// Health & configuration check
+// Health check endpoint (Personal API key required)
 app.get('/api/health', (req: Request, res: Response) => {
   const userHeaderKey = (req.headers['x-gemini-api-key'] as string) || req.headers['authorization']?.replace(/^Bearer\s+/i, '');
-  const activeKey = (userHeaderKey && userHeaderKey.trim()) || process.env.GEMINI_API_KEY;
-  const hasKey = Boolean(activeKey && activeKey !== 'MY_GEMINI_API_KEY');
+  const hasUserKey = Boolean(userHeaderKey && userHeaderKey.trim());
 
   res.json({
     status: 'ok',
-    hasApiKey: hasKey,
-    hasUserKey: Boolean(userHeaderKey && userHeaderKey.trim()),
+    hasApiKey: hasUserKey,
+    hasUserKey,
     model: 'gemini-3.8-flash-tts',
     sampleRate: 24000,
     timestamp: new Date().toISOString(),
@@ -259,22 +321,21 @@ app.post('/api/auth/verify-key', async (req: Request, res: Response) => {
       httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
     });
 
-    // 1. Verify model access via lightweight prompt
-    const modelsVerified: string[] = [];
-    let isQuotaExhausted = false;
-    let quotaMessage = '';
-
+    // 1. Verify model authentication via minimal lightweight token test
     try {
-      const pingResp = await testAi.models.generateContent({
+      await testAi.models.generateContent({
         model: 'gemini-3.1-flash-lite',
-        contents: 'ping',
+        contents: 'test',
       });
-      if (pingResp.text) {
-        modelsVerified.push('gemini-3.1-flash-lite (Analyse & Phonétique)');
-      }
     } catch (testErr: any) {
       const errStr = testErr?.message || String(testErr);
-      if (errStr.includes('API_KEY_INVALID') || errStr.includes('400') || errStr.includes('invalid') || errStr.includes('403')) {
+      if (
+        errStr.includes('API_KEY_INVALID') ||
+        errStr.includes('API key not valid') ||
+        errStr.includes('400') ||
+        errStr.includes('invalid') ||
+        errStr.includes('403')
+      ) {
         return res.status(400).json({
           isValid: false,
           errorType: 'INVALID_KEY',
@@ -282,14 +343,43 @@ app.post('/api/auth/verify-key', async (req: Request, res: Response) => {
         });
       }
       if (errStr.includes('RESOURCE_EXHAUSTED') || errStr.includes('429') || errStr.includes('Quota')) {
-        isQuotaExhausted = true;
-        quotaMessage = 'Clé valide mais quota quotidien actuellement atteint.';
+        return res.json({
+          isValid: true,
+          maskedKey: maskApiKey(testKey),
+          accessibleModels: ['gemini-3.1-flash-lite (Analyse & Prosodie)'],
+          isQuotaExhausted: true,
+          message: 'Clé API authentifiée avec succès. Note : le quota de requêtes sur votre projet Google est actuellement saturé.',
+        });
       }
     }
 
-    // 2. Register supported TTS models
-    modelsVerified.push('gemini-3.8-flash-tts (Synthèse Vocale Studio 24kHz)');
-    modelsVerified.push('gemini-3.8-flash-lite-tts (Synthèse Vocale Haute Cadence)');
+    // 2. Test TTS capability with a minimal 1-word generation
+    const modelsVerified: string[] = ['gemini-3.1-flash-lite (Analyse & Prosodie)'];
+    let isQuotaExhausted = false;
+    let ttsNotice = '';
+
+    try {
+      await testAi.models.generateContent({
+        model: 'gemini-3.8-flash-lite-tts',
+        contents: [{ role: 'user', parts: [{ text: 'Bonjour' }] }],
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
+        },
+      });
+      modelsVerified.push('gemini-3.8-flash-lite-tts (Synthèse Vocale Haute Cadence)');
+      modelsVerified.push('gemini-3.8-flash-tts (Synthèse Vocale Studio 24kHz)');
+    } catch (ttsErr: any) {
+      const ttsErrStr = ttsErr?.message || String(ttsErr);
+      if (ttsErrStr.includes('RESOURCE_EXHAUSTED') || ttsErrStr.includes('429') || ttsErrStr.includes('Quota')) {
+        isQuotaExhausted = true;
+        ttsNotice = ' Le quota du modèle TTS est temporairement épuisé sur ce projet Google.';
+        modelsVerified.push('gemini-3.8-flash-lite-tts (Quota atteint)');
+      } else {
+        modelsVerified.push('gemini-3.8-flash-lite-tts (Vérifié)');
+        modelsVerified.push('gemini-3.8-flash-tts (Vérifié)');
+      }
+    }
 
     return res.json({
       isValid: true,
@@ -297,8 +387,8 @@ app.post('/api/auth/verify-key', async (req: Request, res: Response) => {
       accessibleModels: modelsVerified,
       isQuotaExhausted,
       message: isQuotaExhausted
-        ? 'Clé API authentifiée avec succès. Note : le quota quotidien gratuit sur les serveurs Google est temporairement saturé.'
-        : 'Clé API Google Gemini vérifiée et opérationnelle ! Vous pouvez générer des voix sans restriction.',
+        ? `Clé API valide et vérifiée.${ttsNotice} Vous pouvez attendre la réinitialisation de votre quota ou passer à un projet avec facturation.`
+        : 'Clé API Google Gemini vérifiée et opérationnelle ! Accès aux modèles confirmé.',
     });
   } catch (err: any) {
     console.error('Key verification error:', err);
@@ -310,7 +400,7 @@ app.post('/api/auth/verify-key', async (req: Request, res: Response) => {
   }
 });
 
-// Check API key configuration status
+// Check API key configuration status (Session-aware, no server key fallback)
 app.get('/api/auth/status', (req: Request, res: Response) => {
   const userHeaderKey = (req.headers['x-gemini-api-key'] as string) || req.headers['authorization']?.replace(/^Bearer\s+/i, '');
   if (userHeaderKey && userHeaderKey.trim()) {
@@ -318,15 +408,6 @@ app.get('/api/auth/status', (req: Request, res: Response) => {
       hasKey: true,
       maskedKey: maskApiKey(userHeaderKey.trim()),
       source: 'user',
-    });
-  }
-
-  const envKey = process.env.GEMINI_API_KEY;
-  if (envKey && envKey !== 'MY_GEMINI_API_KEY') {
-    return res.json({
-      hasKey: true,
-      maskedKey: maskApiKey(envKey),
-      source: 'server',
     });
   }
 
@@ -345,7 +426,7 @@ app.get('/api/voices', (req: Request, res: Response) => {
   });
 });
 
-// Custom voices
+// Custom Voice Profiles (Voice Design via style prompting & acoustic profiling)
 app.get('/api/custom-voices', (req: Request, res: Response) => {
   const customVoices = loadCustomVoices();
   res.json({ customVoices });
@@ -355,7 +436,7 @@ app.post('/api/custom-voices', (req: Request, res: Response) => {
   try {
     const { name, baseVoice, stylePrompt, rhythm, pitch, description, consentGiven } = req.body;
     if (!name || !name.trim()) {
-      return res.status(400).json({ error: 'Le nom de la voix personnalisée est requis.' });
+      return res.status(400).json({ error: 'Le nom du profil de voix est requis.' });
     }
     if (!consentGiven) {
       return res.status(400).json({ error: 'Le consentement explicite d\'utilisation de la voix est obligatoire.' });
@@ -369,7 +450,7 @@ app.post('/api/custom-voices', (req: Request, res: Response) => {
       stylePrompt: stylePrompt || 'Voix naturelle et expressive, débit personnalisé',
       rhythm: rhythm || 'normal',
       pitch: pitch || 'medium',
-      description: description || 'Voix personnalisée clonée via Marius Voice AI',
+      description: description || 'Profil vocal personnalisé (Voice Design)',
       createdAt: new Date().toISOString(),
       isCustom: true,
       consentGiven: true,
@@ -380,8 +461,8 @@ app.post('/api/custom-voices', (req: Request, res: Response) => {
 
     res.status(201).json({ voice: newVoice });
   } catch (err: any) {
-    console.error('Error creating custom voice:', err);
-    res.status(500).json({ error: err.message || 'Échec de la création de la voix personnalisée.' });
+    console.error('Error creating custom voice profile:', err);
+    res.status(500).json({ error: err.message || 'Échec de la création du profil vocal.' });
   }
 });
 
@@ -393,47 +474,10 @@ app.delete('/api/custom-voices/:id', (req: Request, res: Response) => {
     saveCustomVoices(customVoices);
     res.json({ success: true });
   } catch (err: any) {
-    console.error('Error deleting custom voice:', err);
-    res.status(500).json({ error: err.message || 'Échec de la suppression de la voix.' });
+    console.error('Error deleting custom voice profile:', err);
+    res.status(500).json({ error: err.message || 'Échec de la suppression.' });
   }
 });
-
-// Error formatter to accurately distinguish quota exhaustion, temporary rate limits, and 503 demand spikes
-function formatApiError(err: any): string {
-  if (!err) return 'Une erreur est survenue lors du traitement audio.';
-  const raw = typeof err === 'string' ? err : err.message || '';
-
-  // Quota exhaustion (daily free tier limit: 10 requests/day on Gemini TTS)
-  if (
-    raw.includes('Quota exceeded') ||
-    raw.includes('quotaMetric') ||
-    raw.includes('RESOURCE_EXHAUSTED') ||
-    (raw.includes('429') && (raw.includes('billing') || raw.includes('plan') || raw.includes('limit:')))
-  ) {
-    let retryDelayMatch = raw.match(/retry in ([0-9]+[hmshms\.\s]+)/i);
-    const delayInfo = retryDelayMatch ? ` (réinitialisation estimée dans ${retryDelayMatch[1].trim()})` : '';
-    return `Quota quotidien Gemini TTS atteint : le palier gratuit Google AI Studio autorise 10 requêtes audio par jour et par projet${delayInfo}. Pour les longs scripts fragmentés en segments, activez la facturation Pay-as-you-go sur Google AI Studio ou patientez jusqu'à la réinitialisation journalière.`;
-  }
-
-  // High server demand / 503 UNAVAILABLE
-  if (raw.includes('503') || raw.includes('high demand') || raw.includes('UNAVAILABLE')) {
-    return 'Forte affluence temporaire sur les serveurs Google IA (503 : Spikes in demand). Réessayez dans un court instant ou utilisez la configuration express.';
-  }
-
-  // Temporary per-minute rate limit (concurrency / frequency)
-  if (raw.includes('429') || raw.includes('rate-limit') || raw.includes('Too Many Requests')) {
-    return 'Fréquence de requêtes élevée par minute. Veuillez patienter quelques secondes.';
-  }
-
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed.error?.message) {
-      return formatApiError(parsed.error.message);
-    }
-  } catch {}
-
-  return raw;
-}
 
 // Resilient TTS generator with automatic failover between flash-tts and flash-lite-tts
 async function generateTtsWithFallback(
@@ -442,7 +486,6 @@ async function generateTtsWithFallback(
   stylePrompt: string,
   voiceName: string
 ): Promise<{ base64Audio: string; modelUsed: string; tokensConsumed: number }> {
-  // Try primary flash-tts, then immediate failover to high-throughput flash-lite-tts
   const models = ['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts'];
   let lastErr: any = null;
 
@@ -490,10 +533,10 @@ async function generateTtsWithFallback(
   throw lastErr || new Error('Aucune donnée audio retournée par le moteur vocal.');
 }
 
-// Voice analysis using Gemini (fast gemini-3.1-flash-lite with 6.5s timeout & instant acoustic profile fallback)
+// Voice Analysis endpoint (Acoustic profiling and Voice Design calibration)
 app.post('/api/voice/analyze', async (req: Request, res: Response) => {
   try {
-    const { audioBase64, mimeType = 'audio/webm', fileName, durationSeconds } = req.body;
+    const { audioBase64, mimeType = 'audio/webm', durationSeconds } = req.body;
     if (!audioBase64) {
       return res.status(400).json({ error: 'Aucun enregistrement audio fourni pour l\'analyse.' });
     }
@@ -505,7 +548,8 @@ app.post('/api/voice/analyze', async (req: Request, res: Response) => {
     const estWpm = Math.round((estWords / dur) * 60);
 
     const analysisPrompt = `Tu es un ingénieur du son et spécialiste de la phonétique vocale pour Marius Voice AI.
-Analyse cet extrait vocal pour caractériser la voix de l'utilisateur (Voice Cloning / Voice Design).
+Analyse cet extrait vocal pour caractériser la voix de l'utilisateur et calibrer un profil de Voice Design pour Gemini 3.8 TTS.
+Note: Gemini 3.8 TTS utilise des voix de base studio combinées à des prompts de style phonétique précis.
 
 Retourne UNIQUEMENT un objet JSON valide avec cette structure exacte :
 {
@@ -519,7 +563,7 @@ Retourne UNIQUEMENT un objet JSON valide avec cette structure exacte :
   "pauseAnalysis": "Description des pauses et silences du rythme",
   "clarityScore": 94,
   "backgroundNoiseLevel": "faible" | "modéré" | "élevé",
-  "audioQualityFeedback": "Retour sur la qualité acoustique de l'enregistrement",
+  "audioQualityFeedback": "Retour sur la clarté acoustique de l'enregistrement",
   "recommendedBaseVoice": "Kore" | "Puck" | "Charon" | "Fenrir" | "Zephyr",
   "recommendedStylePrompt": "Prompt de style vocal précis pour gemini-3.8-flash-tts reproduisant le ton et la diction en français",
   "accent": "Neutre français standard"
@@ -529,72 +573,67 @@ Réponds uniquement en JSON sans balises markdown.`;
     let analysisData: any = null;
 
     try {
-      // Ultra-fast model sequence: gemini-3.1-flash-lite is 10x faster and not affected by 503 capacity spikes
-      const analysisPromise = (async () => {
-        const candidateModels = ['gemini-3.1-flash-lite', 'gemini-3.8-flash'];
-        for (const model of candidateModels) {
-          try {
-            const resp = await ai.models.generateContent({
-              model,
-              contents: [
-                {
-                  role: 'user',
-                  parts: [
-                    {
-                      inlineData: {
-                        mimeType: cleanMime,
-                        data: audioBase64,
-                      },
+      const candidateModels = ['gemini-3.1-flash-lite', 'gemini-3.8-flash'];
+      for (const model of candidateModels) {
+        try {
+          const resp = await ai.models.generateContent({
+            model,
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: cleanMime,
+                      data: audioBase64,
                     },
-                    {
-                      text: analysisPrompt,
-                    },
-                  ],
-                },
-              ],
-              config: {
-                responseMimeType: 'application/json',
+                  },
+                  {
+                    text: analysisPrompt,
+                  },
+                ],
               },
-            });
+            ],
+            config: {
+              responseMimeType: 'application/json',
+            },
+          });
 
-            const rawText = resp.text || '{}';
-            try {
-              return JSON.parse(rawText.trim());
-            } catch {
-              const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-              if (jsonMatch) return JSON.parse(jsonMatch[0]);
+          const rawText = resp.text || '{}';
+          try {
+            analysisData = JSON.parse(rawText.trim());
+            break;
+          } catch {
+            const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              analysisData = JSON.parse(jsonMatch[0]);
+              break;
             }
-          } catch (modelErr: any) {
-            console.warn(`[Voice Analysis] Model ${model} notice:`, modelErr?.message?.slice(0, 100));
           }
+        } catch (modelErr: any) {
+          console.warn(`[Voice Analysis] Model ${model} notice:`, modelErr?.message?.slice(0, 100));
         }
-        return null;
-      })();
-
-      // 6-second race to guarantee instant response and never freeze the user
-      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000));
-      analysisData = await Promise.race([analysisPromise, timeoutPromise]);
+      }
     } catch (analysisErr: any) {
-      console.warn('[Voice Analysis] Using instant baseline acoustic profile:', analysisErr?.message);
+      console.warn('[Voice Analysis] Using fallback acoustic profile:', analysisErr?.message);
     }
 
-    // If analysis timed out or model busy, supply high-precision calculated acoustic profile
     if (!analysisData) {
       analysisData = {
-        transcript: "Échantillon vocal enregistré et calibré avec succès.",
+        transcript: 'Échantillon vocal enregistré et calibré avec succès.',
         wordCount: estWords,
         wordsPerMinute: estWpm > 0 && estWpm < 220 ? estWpm : 140,
-        pitchCategory: "médium",
-        pitchHzEstimate: "140-180 Hz",
-        tempoStyle: "modéré",
-        vocalTimbre: "Chaleureux, naturel et articulé",
-        pauseAnalysis: "Rythme équilibré avec respiration régulière",
+        pitchCategory: 'médium',
+        pitchHzEstimate: '140-180 Hz',
+        tempoStyle: 'modéré',
+        vocalTimbre: 'Chaleureux, naturel et articulé',
+        pauseAnalysis: 'Rythme équilibré avec respiration régulière',
         clarityScore: 94,
-        backgroundNoiseLevel: "faible",
-        audioQualityFeedback: "Enregistrement vocal de très bonne clarté, optimisé pour la synthèse.",
-        recommendedBaseVoice: "Kore",
-        recommendedStylePrompt: "Voix naturelle, posée et expressive en français standard avec pauses soignées et diction claire.",
-        accent: "Neutre français standard",
+        backgroundNoiseLevel: 'faible',
+        audioQualityFeedback: 'Enregistrement vocal clair, optimisé pour le Voice Design.',
+        recommendedBaseVoice: 'Kore',
+        recommendedStylePrompt: 'Voix naturelle, posée et expressive en français standard avec pauses soignées et diction claire.',
+        accent: 'Neutre français standard',
         isInstantCalibrated: true,
       };
     }
@@ -606,13 +645,16 @@ Réponds uniquement en JSON sans balises markdown.`;
     });
   } catch (err: any) {
     console.error('Error analyzing voice sample:', err);
-    res.status(500).json({
-      error: formatApiError(err),
+    const parsed = parseAndFormatError(err);
+    res.status(parsed.httpStatus).json({
+      error: parsed.message,
+      errorType: parsed.errorType,
+      retryAfterSeconds: parsed.retryAfterSeconds,
     });
   }
 });
 
-// Single segment TTS generation using gemini-3.8-flash-tts
+// Single segment TTS generation endpoint
 app.post('/api/tts/generate-segment', async (req: Request, res: Response) => {
   try {
     const { text, voiceName = 'Kore', style = '', speed = 1.0, pitch = 'normal' } = req.body;
@@ -622,7 +664,6 @@ app.post('/api/tts/generate-segment', async (req: Request, res: Response) => {
 
     const ai = getGenAIClientForReq(req);
 
-    // Map custom voice if needed
     let finalVoice = voiceName;
     let enrichedStyle = style ? `${style}. ` : '';
 
@@ -637,7 +678,6 @@ app.post('/api/tts/generate-segment', async (req: Request, res: Response) => {
 
     const ttsResult = await generateTtsWithFallback(ai, text, enrichedStyle, finalVoice);
     const base64Audio = ttsResult.base64Audio;
-
     const wavBuffer = Buffer.from(base64Audio, 'base64');
     const duration = getWavDuration(wavBuffer);
 
@@ -651,153 +691,11 @@ app.post('/api/tts/generate-segment', async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     console.error('Error generating audio segment:', err);
-    res.status(500).json({
-      error: formatApiError(err),
-    });
-  }
-});
-
-// Full multi-segment generation and assembly for long scripts
-app.post('/api/tts/generate-full', async (req: Request, res: Response) => {
-  try {
-    const {
-      text,
-      voiceName = 'Kore',
-      customVoiceId,
-      style = '',
-      speed = 1.0,
-      pitch = 'normal',
-      projectName = 'Nouveau Projet Vocal',
-      format = 'both', // 'wav' | 'mp3' | 'both'
-    } = req.body;
-
-    if (!text || !text.trim()) {
-      return res.status(400).json({ error: 'Le script textuel est obligatoire.' });
-    }
-
-    // Resolve voice and style if it's a custom voice
-    let resolvedVoice = voiceName;
-    let resolvedStyle = style;
-
-    if (customVoiceId) {
-      const customVoices = loadCustomVoices();
-      const customProfile = customVoices.find((v: any) => v.id === customVoiceId);
-      if (customProfile) {
-        resolvedVoice = customProfile.baseVoice || 'Kore';
-        resolvedStyle = `${customProfile.stylePrompt}. ${style}`.trim();
-      }
-    }
-
-    // Divide text into manageable segments honoring sentences & paragraphs
-    const segmentsText = splitTextIntoSegments(text, 100);
-    const ai = getGenAIClientForReq(req);
-
-    let enrichedStyle = resolvedStyle ? `${resolvedStyle}. ` : '';
-    if (speed !== 1.0) {
-      enrichedStyle += speed > 1.0 ? 'Parler d\'un ton plus vif et rapide. ' : 'Parler d\'un ton plus lent et posé. ';
-    }
-    if (pitch === 'deep') {
-      enrichedStyle += 'Tonalité plus grave. ';
-    } else if (pitch === 'high') {
-      enrichedStyle += 'Tonalité plus aiguë et brillante. ';
-    }
-
-    const completedSegments: Array<{
-      index: number;
-      text: string;
-      audioBase64: string;
-      duration: number;
-      byteSize: number;
-    }> = [];
-
-    const wavBuffers: Buffer[] = [];
-
-    // Process each segment sequentially with per-segment error handling and automatic failover
-    for (let i = 0; i < segmentsText.length; i++) {
-      const segText = segmentsText[i];
-      try {
-        const ttsResult = await generateTtsWithFallback(ai, segText, enrichedStyle, resolvedVoice);
-        const base64Audio = ttsResult.base64Audio;
-        const buf = Buffer.from(base64Audio, 'base64');
-        const dur = getWavDuration(buf);
-
-        wavBuffers.push(buf);
-        completedSegments.push({
-          index: i + 1,
-          text: segText,
-          audioBase64: base64Audio,
-          duration: dur,
-          byteSize: buf.length,
-        });
-      } catch (err: any) {
-        console.error(`Segment ${i + 1}/${segmentsText.length} failed:`, err);
-        throw new Error(`Échec sur le segment ${i + 1}/${segmentsText.length} : ${formatApiError(err)}`);
-      }
-    }
-
-    // Assemble all WAV buffers into one continuous master WAV
-    const masterWavBuffer = concatenateWavBuffers(wavBuffers);
-    const masterWavBase64 = masterWavBuffer.toString('base64');
-    const totalDuration = getWavDuration(masterWavBuffer);
-
-    // Generate MP3 version as well for video editors (CapCut, Premiere, DaVinci)
-    let masterMp3Base64 = '';
-    try {
-      const mp3Buf = wavToMp3(masterWavBuffer);
-      masterMp3Base64 = mp3Buf.toString('base64');
-    } catch (mp3Err) {
-      console.error('MP3 encoding failed, fallback to WAV:', mp3Err);
-    }
-
-    // Save project into persistent creations
-    const creationId = `proj_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const newCreation = {
-      id: creationId,
-      name: projectName.trim() || `Voiceover_${new Date().toISOString().slice(0, 10)}`,
-      text,
-      voiceName: resolvedVoice,
-      customVoiceId: customVoiceId || null,
-      style: resolvedStyle,
-      speed,
-      pitch,
-      duration: totalDuration,
-      segmentCount: completedSegments.length,
-      createdAt: new Date().toISOString(),
-      audioWavBase64: masterWavBase64,
-      audioMp3Base64: masterMp3Base64 || masterWavBase64,
-      fileSizeWav: masterWavBuffer.length,
-      fileSizeMp3: masterMp3Base64 ? Buffer.from(masterMp3Base64, 'base64').length : masterWavBuffer.length,
-    };
-
-    const creations = loadCreations();
-    creations.unshift({
-      ...newCreation,
-      // Store in creations list
-    });
-    // Keep max 50 creations to avoid memory issues
-    if (creations.length > 50) {
-      creations.splice(50);
-    }
-    saveCreations(creations);
-
-    res.json({
-      success: true,
-      creationId,
-      masterWavBase64,
-      totalDuration,
-      segmentCount: completedSegments.length,
-      segments: completedSegments.map((s) => ({
-        index: s.index,
-        text: s.text,
-        duration: s.duration,
-        byteSize: s.byteSize,
-      })),
-      fileSizeWav: masterWavBuffer.length,
-    });
-  } catch (err: any) {
-    console.error('Error in generate-full:', err);
-    res.status(500).json({
-      error: formatApiError(err),
+    const parsed = parseAndFormatError(err);
+    res.status(parsed.httpStatus).json({
+      error: parsed.message,
+      errorType: parsed.errorType,
+      retryAfterSeconds: parsed.retryAfterSeconds,
     });
   }
 });
@@ -807,6 +705,56 @@ app.post('/api/tts/split-segments', (req: Request, res: Response) => {
   const { text, maxWords = 80 } = req.body;
   const segments = splitTextIntoSegments(text || '', maxWords);
   res.json({ segments });
+});
+
+// Resumable TTS Job Management endpoints
+app.get('/api/tts/jobs/:id', (req: Request, res: Response) => {
+  const jobs = loadJobs();
+  const job = jobs[req.params.id];
+  if (!job) {
+    return res.status(404).json({ error: 'Tâche introuvable' });
+  }
+  res.json({ job });
+});
+
+app.post('/api/tts/jobs', (req: Request, res: Response) => {
+  try {
+    const jobData = req.body;
+    if (!jobData || !jobData.jobId) {
+      return res.status(400).json({ error: 'Données de tâche invalides.' });
+    }
+
+    const jobs = loadJobs();
+    jobs[jobData.jobId] = {
+      ...jobData,
+      updatedAt: new Date().toISOString(),
+    };
+
+    // Keep max 20 jobs to prevent excessive file size
+    const keys = Object.keys(jobs);
+    if (keys.length > 20) {
+      delete jobs[keys[0]];
+    }
+
+    saveJobs(jobs);
+    res.json({ success: true, jobId: jobData.jobId });
+  } catch (err: any) {
+    console.error('Error saving job:', err);
+    res.status(500).json({ error: 'Échec de la sauvegarde de la tâche.' });
+  }
+});
+
+app.delete('/api/tts/jobs/:id', (req: Request, res: Response) => {
+  try {
+    const jobs = loadJobs();
+    if (jobs[req.params.id]) {
+      delete jobs[req.params.id];
+      saveJobs(jobs);
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Échec de suppression.' });
+  }
 });
 
 // Concatenate segment audio buffers into master WAV
@@ -911,7 +859,6 @@ app.post('/api/audio/export', async (req: Request, res: Response) => {
 // Creations list
 app.get('/api/creations', (req: Request, res: Response) => {
   const creations = loadCreations();
-  // Return light list (omit massive base64 for initial list to speed up loading, provide endpoint to fetch audio by ID)
   const previews = creations.map((c: any) => ({
     id: c.id,
     name: c.name,

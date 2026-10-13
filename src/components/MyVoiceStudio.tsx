@@ -409,21 +409,32 @@ export const MyVoiceStudio: React.FC<MyVoiceStudioProps> = ({
         <div className="max-w-2xl relative z-10">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-500/15 border border-purple-500/30 text-purple-300 text-xs font-semibold uppercase tracking-wider mb-3">
             <Sparkles className="w-3.5 h-3.5" />
-            Studio Vocal • Clonage & Personnalisation
+            Studio Vocal • Voice Design & Profil Personnalisé
           </div>
           <h1 className="text-2xl sm:text-4xl font-extrabold text-white tracking-tight mb-3">
-            Créez Votre Voix Sur-Mesure
+            Créez Votre Profil Vocal Sur-Mesure
           </h1>
           <p className="text-gray-300 text-sm sm:text-base leading-relaxed">
-            Enregistrez ou déposez un échantillon vocal de 15 à 60 secondes. Notre intelligence acoustique analyse votre rythme, intonation, et timbre pour modéliser une voix personnalisée réutilisable dans vos narrations.
+            Enregistrez ou déposez un échantillon vocal de 15 à 60 secondes. L'intelligence acoustique analyse votre rythme, intonation, et timbre pour calibrer un profil de Voice Design réutilisable dans vos narrations.
           </p>
         </div>
 
-        {/* Security & Consent notice pill */}
-        <div className="mt-6 flex items-start gap-3 p-3.5 rounded-2xl bg-white/5 border border-white/10 text-xs text-gray-300">
-          <ShieldCheck className="w-5 h-5 text-purple-400 shrink-0 mt-0.5" />
+        {/* Technical Transparency Banner */}
+        <div className="mt-6 flex items-start gap-3 p-4 rounded-2xl bg-purple-950/30 border border-purple-500/30 text-xs text-purple-200">
+          <Info className="w-5 h-5 text-purple-400 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <p className="font-semibold text-white">Fonctionnement du moteur vocal Gemini 3.8 TTS :</p>
+            <p className="text-gray-300 leading-relaxed">
+              L'API Google Gemini ne réalise pas de clonage biométrique par copie brute d'empreinte vocale (non supporté par l'API publique Google). Marius Voice AI analyse vos caractéristiques acoustiques (hauteur en Hz, débit, timbre, pauses) pour associer automatiquement la voix studio de base la plus proche ('Kore', 'Puck', 'Charon', 'Fenrir' ou 'Zephyr') à un prompt de style phonétique détaillé.
+            </p>
+          </div>
+        </div>
+
+        {/* Consent Notice */}
+        <div className="mt-3 flex items-start gap-3 p-3.5 rounded-2xl bg-white/5 border border-white/10 text-xs text-gray-300">
+          <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
           <p>
-            <strong className="text-white">Confidentialité & Déontologie :</strong> Vos enregistrements vocaux restent privés et sécurisés. Marius Voice AI applique une politique stricte contre le clonage non-autorisé : vous devez détenir les droits sur la voix utilisée.
+            <strong className="text-white">Confidentialité & Droits :</strong> Vos enregistrements audio restent protégés et ne sont jamais partagés publiquement. Vous devez posséder les droits sur la voix utilisée.
           </p>
         </div>
       </div>
