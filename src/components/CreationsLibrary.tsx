@@ -16,28 +16,46 @@ import {
   Check,
   ChevronDown,
   Music,
-  RotateCcw,
+  Plus,
+  Info,
+  CheckCircle2,
+  AlertCircle,
+  FileText,
   VolumeX,
+  Layers,
 } from 'lucide-react';
-import { SavedCreation } from '../types.ts';
+import { SavedCreation, SavedProject } from '../types.ts';
 import { deleteCreation, exportAudio, getCreationDetails } from '../services/api.ts';
+import { projectManager } from '../services/projectManager.ts';
 
 interface CreationsLibraryProps {
   creations: SavedCreation[];
   onDeleteSuccess: (id: string) => void;
-  onOpenInEditor: (creation: SavedCreation) => void;
+  onOpenInEditor: (item: {
+    id?: string;
+    name?: string;
+    text: string;
+    voiceName: string;
+    speed?: number;
+    pitch?: 'deep' | 'normal' | 'high';
+    style?: string;
+    segments?: any[];
+  }) => void;
+  onNewProject?: () => void;
 }
 
 export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
   creations,
   onDeleteSuccess,
   onOpenInEditor,
+  onNewProject,
 }) => {
+  const [localProjects, setLocalProjects] = useState<SavedProject[]>(() => projectManager.getProjects());
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedVoiceFilter, setSelectedVoiceFilter] = useState('all');
 
-  // Currently playing creation
-  const [activeCreation, setActiveCreation] = useState<SavedCreation | null>(null);
+  // Currently playing item
+  const [activeItem, setActiveItem] = useState<{ id: string; name: string; voiceName: string; duration: number; wavBase64?: string } | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -50,6 +68,11 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
   const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
   const [exportingState, setExportingState] = useState<{ id: string; format: string } | null>(null);
   const [downloadSuccessNotice, setDownloadSuccessNotice] = useState<string | null>(null);
+
+  // Refresh local projects on mount and when creations change
+  useEffect(() => {
+    setLocalProjects(projectManager.getProjects());
+  }, [creations]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -67,8 +90,72 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
     }
   }, [volume, isMuted]);
 
-  const handlePlayToggle = async (creation: SavedCreation) => {
-    if (activeCreation?.id === creation.id && audioRef.current) {
+  // Unified items list: combines local projects and server creations (deduped by ID)
+  const unifiedItems = React.useMemo(() => {
+    const list: Array<{
+      id: string;
+      name: string;
+      text: string;
+      voiceName: string;
+      speed: number;
+      pitch: 'deep' | 'normal' | 'high';
+      style: string;
+      duration: number;
+      segmentCount: number;
+      createdAt: string;
+      audioWavBase64?: string;
+      segments?: any[];
+      isProjectOnly: boolean;
+    }> = [];
+
+    const seenIds = new Set<string>();
+
+    // 1. Add local persistent projects
+    for (const p of localProjects) {
+      seenIds.add(p.id);
+      list.push({
+        id: p.id,
+        name: p.name || 'Projet Vocal',
+        text: p.text || '',
+        voiceName: p.voiceName || 'Kore',
+        speed: p.speed ?? 1.0,
+        pitch: p.pitch || 'normal',
+        style: p.style || '',
+        duration: p.duration || 0,
+        segmentCount: p.segments?.length || p.segmentCount || 0,
+        createdAt: p.createdAt || p.updatedAt || new Date().toISOString(),
+        audioWavBase64: p.audioWavBase64,
+        segments: p.segments,
+        isProjectOnly: !p.audioWavBase64,
+      });
+    }
+
+    // 2. Add server creations not already in local projects
+    for (const c of creations) {
+      if (!seenIds.has(c.id)) {
+        seenIds.add(c.id);
+        list.push({
+          id: c.id,
+          name: c.name,
+          text: c.text,
+          voiceName: c.voiceName,
+          speed: c.speed ?? 1.0,
+          pitch: (c.pitch as any) || 'normal',
+          style: c.style || '',
+          duration: c.duration || 0,
+          segmentCount: c.segmentCount || 1,
+          createdAt: c.createdAt,
+          audioWavBase64: c.audioWavBase64,
+          isProjectOnly: false,
+        });
+      }
+    }
+
+    return list;
+  }, [localProjects, creations]);
+
+  const handlePlayToggle = async (item: { id: string; name: string; voiceName: string; duration: number; audioWavBase64?: string }) => {
+    if (activeItem?.id === item.id && audioRef.current) {
       if (isPlaying) {
         audioRef.current.pause();
         setIsPlaying(false);
@@ -83,15 +170,15 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
       audioRef.current.pause();
     }
 
-    let wavData = creation.audioWavBase64;
+    let wavData = item.audioWavBase64;
 
     // Fetch full details if base64 is missing
     if (!wavData) {
-      setLoadingAudioId(creation.id);
+      setLoadingAudioId(item.id);
       try {
-        const details = await getCreationDetails(creation.id);
+        const details = await getCreationDetails(item.id);
         wavData = details.creation.audioWavBase64;
-        creation.audioWavBase64 = wavData;
+        item.audioWavBase64 = wavData;
       } catch (err) {
         console.error('Error fetching audio for creation:', err);
         setLoadingAudioId(null);
@@ -100,9 +187,19 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
       setLoadingAudioId(null);
     }
 
-    setActiveCreation(creation);
+    if (!wavData) {
+      return;
+    }
+
+    setActiveItem({
+      id: item.id,
+      name: item.name,
+      voiceName: item.voiceName,
+      duration: item.duration || 0,
+      wavBase64: wavData,
+    });
     setCurrentTime(0);
-    setDuration(creation.duration || 0);
+    setDuration(item.duration || 0);
 
     const src = `data:audio/wav;base64,${wavData}`;
     if (audioRef.current) {
@@ -133,33 +230,33 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
   };
 
   // Export format handler
-  const handleExportFormat = async (creation: SavedCreation, format: 'mp3' | 'wav' | 'ogg', e: React.MouseEvent) => {
+  const handleExportFormat = async (item: { id: string; name: string; audioWavBase64?: string }, format: 'mp3' | 'wav' | 'ogg', e: React.MouseEvent) => {
     e.stopPropagation();
     setOpenDropdownId(null);
-    setExportingState({ id: creation.id, format });
+    setExportingState({ id: item.id, format });
 
     try {
       let exportBase64 = '';
       let mime = 'audio/wav';
 
-      if (format === 'wav' && creation.audioWavBase64) {
-        exportBase64 = creation.audioWavBase64;
+      if (format === 'wav' && item.audioWavBase64) {
+        exportBase64 = item.audioWavBase64;
         mime = 'audio/wav';
       } else {
         const result = await exportAudio({
-          creationId: creation.id,
-          wavBase64: creation.audioWavBase64,
+          creationId: item.id,
+          wavBase64: item.audioWavBase64,
           format,
         });
         exportBase64 = result.audioBase64;
         mime = result.mimeType;
       }
 
-      const cleanTitle = creation.name
+      const cleanTitle = item.name
         .toLowerCase()
         .replace(/[^a-z0-9_-]/g, '-')
         .replace(/-+/g, '-') || 'projet';
-      const dateStr = creation.createdAt.slice(0, 10);
+      const dateStr = new Date().toISOString().slice(0, 10);
       const fileName = `marius-voice-ai-${cleanTitle}-${dateStr}.${format}`;
 
       const link = document.createElement('a');
@@ -169,7 +266,7 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
       link.click();
       document.body.removeChild(link);
 
-      setDownloadSuccessNotice(`${creation.id}-${format}`);
+      setDownloadSuccessNotice(`${item.id}-${format}`);
       setTimeout(() => setDownloadSuccessNotice(null), 3500);
     } catch (err) {
       console.error('Export failed:', err);
@@ -178,20 +275,46 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
     }
   };
 
-  const handleDelete = async (id: string, e: React.MouseEvent) => {
+  // Download all segments of a project separately
+  const handleDownloadProjectSegments = (item: { name: string; segments?: any[] }, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (window.confirm('Voulez-vous vraiment supprimer cet enregistrement ?')) {
-      if (activeCreation?.id === id && audioRef.current) {
+    if (!item.segments || item.segments.length === 0) return;
+    const completed = item.segments.filter((s) => Boolean(s.audioBase64));
+    if (completed.length === 0) return;
+
+    completed.forEach((seg, i) => {
+      setTimeout(() => {
+        const link = document.createElement('a');
+        link.href = `data:audio/wav;base64,${seg.audioBase64}`;
+        const sanitized = item.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-') || 'projet';
+        link.download = `marius-${sanitized}-segment-${seg.index}.wav`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }, i * 350);
+    });
+  };
+
+  // Delete project with confirmation (Phase 2 requirement)
+  const handleDelete = async (id: string, name: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (window.confirm(`Voulez-vous vraiment supprimer définitivement le projet « ${name} » ?\nCette action est irréversible.`)) {
+      if (activeItem?.id === id && audioRef.current) {
         audioRef.current.pause();
-        setActiveCreation(null);
+        setActiveItem(null);
         setIsPlaying(false);
       }
+
+      // Delete from local storage
+      projectManager.deleteProject(id);
+      setLocalProjects(projectManager.getProjects());
+
+      // Delete from server if exists
       try {
         await deleteCreation(id);
-        onDeleteSuccess(id);
-      } catch (err) {
-        console.error('Delete error:', err);
-      }
+      } catch {}
+
+      onDeleteSuccess(id);
     }
   };
 
@@ -202,8 +325,8 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
-  // Filtered and searched creations
-  const filteredCreations = creations.filter((item) => {
+  // Filtered and searched items
+  const filteredItems = unifiedItems.filter((item) => {
     const matchesSearch =
       item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       item.text.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -212,7 +335,7 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
     return matchesSearch && matchesVoice;
   });
 
-  const uniqueVoices = Array.from(new Set(creations.map((c) => c.voiceName)));
+  const uniqueVoices = Array.from(new Set(unifiedItems.map((c) => c.voiceName)));
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto pb-16">
@@ -228,35 +351,59 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
         <div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-white flex items-center gap-3">
             <Library className="w-7 h-7 text-purple-400" />
-            Bibliothèque Audio : Mes Créations
+            Mes Projets & Créations Vocales
           </h1>
           <p className="text-sm text-gray-400 mt-1">
-            Écoutez, gérez et exportez vos fichiers au format <strong>MP3, WAV ou OGG</strong> en un clic.
+            Gérez vos scripts, vos segments enregistrés et exportez vos fichiers audio en <strong>MP3, WAV ou OGG</strong>.
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="px-3 py-1.5 rounded-xl bg-purple-500/15 border border-purple-500/30 text-purple-300 text-xs font-bold font-mono">
-            {creations.length} {creations.length > 1 ? 'projets enregistrés' : 'projet enregistré'}
+        <div className="flex items-center gap-3">
+          {onNewProject && (
+            <button
+              type="button"
+              onClick={onNewProject}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold shadow-lg shadow-purple-900/40 transition-all cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Nouveau projet</span>
+            </button>
+          )}
+
+          <span className="px-3 py-2 rounded-xl bg-purple-500/15 border border-purple-500/30 text-purple-300 text-xs font-bold font-mono">
+            {unifiedItems.length} {unifiedItems.length > 1 ? 'projets' : 'projet'}
+          </span>
+        </div>
+      </div>
+
+      {/* Persistence Notice (Phase 2 requirement) */}
+      <div className="p-4 rounded-2xl bg-[#0b0e1b] border border-purple-500/20 text-xs text-gray-300 flex items-start gap-3 shadow-lg">
+        <Info className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
+        <div className="leading-relaxed">
+          <strong className="text-purple-300 block mb-0.5">Persistance locale des projets garantie :</strong>
+          Vos projets (textes, voix, réglages de vitesse/tonalité et statuts des segments) sont enregistrés dans le stockage persistant de votre navigateur web (<code>localStorage</code>). Vous les retrouverez lors de vos prochaines visites sur cet appareil.
+          <span className="text-gray-400 block mt-1">
+            Note technique d'infrastructure : Les fonctions serverless de Vercel n'offrent pas de disque durable dans <code>/tmp</code>. Pour synchroniser vos projets automatiquement entre plusieurs ordinateurs distincts sans réimporter vos fichiers, une base de données cloud externe (comme PostgreSQL ou Firestore) serait requise.
           </span>
         </div>
       </div>
 
       {/* Active Audio Player Bar (Sticky when playing) */}
-      {activeCreation && (
+      {activeItem && (
         <div className="bg-gradient-to-r from-purple-950/60 via-[#121528] to-indigo-950/60 rounded-2xl border border-purple-500/40 p-4 sm:p-5 shadow-2xl space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <button
-                onClick={() => handlePlayToggle(activeCreation)}
+                type="button"
+                onClick={() => handlePlayToggle(activeItem)}
                 className="w-10 h-10 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-lg shadow-purple-900/40 hover:from-purple-500 hover:to-indigo-500 transition-all active:scale-95 cursor-pointer shrink-0"
               >
                 {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
               </button>
               <div>
-                <h3 className="font-bold text-sm sm:text-base text-white">{activeCreation.name}</h3>
+                <h3 className="font-bold text-sm sm:text-base text-white">{activeItem.name}</h3>
                 <p className="text-xs text-purple-300">
-                  Voix : {activeCreation.voiceName} • {formatDuration(currentTime)} / {formatDuration(duration || activeCreation.duration)}
+                  Voix : {activeItem.voiceName} • {formatDuration(currentTime)} / {formatDuration(duration || activeItem.duration)}
                 </p>
               </div>
             </div>
@@ -266,6 +413,7 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
               {/* Volume */}
               <div className="hidden sm:flex items-center gap-2">
                 <button
+                  type="button"
                   onClick={() => setIsMuted(!isMuted)}
                   className="text-gray-400 hover:text-white transition-colors"
                 >
@@ -288,18 +436,19 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
               {/* "Exporter au format" Dropdown for Active Player */}
               <div className="relative">
                 <button
+                  type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     setOpenDropdownId(openDropdownId === 'player' ? null : 'player');
                   }}
                   className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-md shadow-purple-900/30 transition-all cursor-pointer"
                 >
-                  {exportingState?.id === activeCreation.id ? (
+                  {exportingState?.id === activeItem.id ? (
                     <>
                       <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                       <span>Export {exportingState.format.toUpperCase()}...</span>
                     </>
-                  ) : downloadSuccessNotice?.startsWith(activeCreation.id) ? (
+                  ) : downloadSuccessNotice?.startsWith(activeItem.id) ? (
                     <>
                       <Check className="w-3.5 h-3.5 text-emerald-300" />
                       <span>Téléchargé !</span>
@@ -322,7 +471,8 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
                       Choisir le format d'export
                     </div>
                     <button
-                      onClick={(e) => handleExportFormat(activeCreation, 'mp3', e)}
+                      type="button"
+                      onClick={(e) => handleExportFormat({ id: activeItem.id, name: activeItem.name, audioWavBase64: activeItem.wavBase64 }, 'mp3', e)}
                       className="w-full flex items-center justify-between p-2 rounded-xl text-xs text-left hover:bg-purple-600/20 text-gray-200 hover:text-white transition-colors cursor-pointer"
                     >
                       <div className="flex items-center gap-2">
@@ -335,7 +485,8 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
                       <Download className="w-3.5 h-3.5 text-gray-500" />
                     </button>
                     <button
-                      onClick={(e) => handleExportFormat(activeCreation, 'wav', e)}
+                      type="button"
+                      onClick={(e) => handleExportFormat({ id: activeItem.id, name: activeItem.name, audioWavBase64: activeItem.wavBase64 }, 'wav', e)}
                       className="w-full flex items-center justify-between p-2 rounded-xl text-xs text-left hover:bg-purple-600/20 text-gray-200 hover:text-white transition-colors cursor-pointer"
                     >
                       <div className="flex items-center gap-2">
@@ -348,7 +499,8 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
                       <Download className="w-3.5 h-3.5 text-gray-500" />
                     </button>
                     <button
-                      onClick={(e) => handleExportFormat(activeCreation, 'ogg', e)}
+                      type="button"
+                      onClick={(e) => handleExportFormat({ id: activeItem.id, name: activeItem.name, audioWavBase64: activeItem.wavBase64 }, 'ogg', e)}
                       className="w-full flex items-center justify-between p-2 rounded-xl text-xs text-left hover:bg-purple-600/20 text-gray-200 hover:text-white transition-colors cursor-pointer"
                     >
                       <div className="flex items-center gap-2">
@@ -413,24 +565,38 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
         </div>
       </div>
 
-      {/* Creations Grid */}
-      {filteredCreations.length === 0 ? (
-        <div className="text-center py-16 px-4 bg-[#101322] border border-dashed border-white/10 rounded-3xl">
-          <Library className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-          <h3 className="text-base font-bold text-gray-300">Aucune création trouvée</h3>
-          <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
+      {/* Projects Grid */}
+      {filteredItems.length === 0 ? (
+        <div className="text-center py-16 px-4 bg-[#101322] border border-dashed border-white/10 rounded-3xl space-y-3">
+          <Library className="w-12 h-12 text-gray-600 mx-auto" />
+          <h3 className="text-base font-bold text-gray-300">Aucun projet trouvé</h3>
+          <p className="text-xs text-gray-500 max-w-md mx-auto">
             {searchQuery
-              ? 'Aucun projet ne correspond à votre recherche. Essayez d\'autres mots-clés.'
-              : 'Générez votre premier enregistrement audio depuis l\'onglet Synthèse Vocale !'}
+              ? 'Aucun projet ne correspond à votre recherche.'
+              : 'Créez votre premier projet vocal ou commencez une synthèse vocale !'}
           </p>
+          {onNewProject && (
+            <button
+              type="button"
+              onClick={onNewProject}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-all shadow-md cursor-pointer mt-2"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Créer un projet</span>
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {filteredCreations.map((item) => {
-            const isItemPlaying = activeCreation?.id === item.id && isPlaying;
+          {filteredItems.map((item) => {
+            const isItemPlaying = activeItem?.id === item.id && isPlaying;
             const isLoading = loadingAudioId === item.id;
             const isMenuOpen = openDropdownId === item.id;
             const isItemExporting = exportingState?.id === item.id;
+            const hasAudio = Boolean(item.audioWavBase64);
+            const segmentsCompleted = item.segments
+              ? item.segments.filter((s: any) => s.status === 'completed').length
+              : (hasAudio ? item.segmentCount : 0);
 
             return (
               <div
@@ -441,20 +607,38 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
                 <div>
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div>
-                      <h3 className="font-bold text-base text-white hover:text-purple-300 transition-colors">
-                        {item.name}
-                      </h3>
-                      <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-gray-400">
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-bold text-base text-white hover:text-purple-300 transition-colors">
+                          {item.name}
+                        </h3>
+                        {hasAudio ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
+                            Audio Prêt
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 border border-amber-500/30 text-amber-300">
+                            Brouillon
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs text-gray-400">
                         <span className="flex items-center gap-1 font-mono text-[11px] text-purple-300 bg-purple-500/10 border border-purple-500/20 px-2 py-0.5 rounded-full">
                           <Volume2 className="w-3 h-3" />
                           {item.voiceName}
                         </span>
-                        <span className="flex items-center gap-1 text-[11px]">
-                          <Clock className="w-3 h-3 text-gray-500" />
-                          {formatDuration(item.duration)}
+                        <span className="text-[11px] bg-white/5 border border-white/5 px-2 py-0.5 rounded-full text-gray-300">
+                          {item.speed}x • {item.pitch}
                         </span>
-                        <span className="text-[11px] text-gray-500">
-                          {item.segmentCount} {item.segmentCount > 1 ? 'segments' : 'segment'}
+                        {item.duration > 0 && (
+                          <span className="flex items-center gap-1 text-[11px]">
+                            <Clock className="w-3 h-3 text-gray-500" />
+                            {formatDuration(item.duration)}
+                          </span>
+                        )}
+                        <span className="text-[11px] text-gray-400 flex items-center gap-1">
+                          <Layers className="w-3 h-3 text-gray-500" />
+                          {segmentsCompleted}/{item.segmentCount} segments
                         </span>
                         <span className="text-[11px] text-gray-500 flex items-center gap-1">
                           <Calendar className="w-3 h-3" />
@@ -463,11 +647,12 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
                       </div>
                     </div>
 
-                    {/* Delete button */}
+                    {/* Delete button with confirmation */}
                     <button
-                      onClick={(e) => handleDelete(item.id, e)}
-                      className="p-1.5 text-gray-500 hover:text-red-400 rounded-lg hover:bg-white/5 transition-colors shrink-0"
-                      title="Supprimer ce projet"
+                      type="button"
+                      onClick={(e) => handleDelete(item.id, item.name, e)}
+                      className="p-1.5 text-gray-500 hover:text-red-400 rounded-lg hover:bg-white/5 transition-colors shrink-0 cursor-pointer"
+                      title="Supprimer définitivement ce projet"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -475,138 +660,191 @@ export const CreationsLibrary: React.FC<CreationsLibraryProps> = ({
 
                   {/* Text Excerpt */}
                   <div className="p-3 rounded-xl bg-[#090b14] border border-white/5 text-xs text-gray-300 line-clamp-3 italic">
-                    "{item.text}"
+                    "{item.text || 'Aucun texte saisi'}"
                   </div>
+
+                  {/* Segment status indicator */}
+                  {item.segments && item.segments.length > 0 && (
+                    <div className="mt-2 flex flex-wrap items-center gap-1">
+                      {item.segments.map((s: any) => (
+                        <span
+                          key={s.index}
+                          className={`w-2 h-2 rounded-full ${
+                            s.status === 'completed'
+                              ? 'bg-emerald-400'
+                              : s.status === 'failed'
+                              ? 'bg-red-400'
+                              : 'bg-gray-600'
+                          }`}
+                          title={`Segment #${s.index} : ${s.status}`}
+                        />
+                      ))}
+                      <span className="text-[10px] text-gray-500 ml-1">
+                        ({segmentsCompleted}/{item.segments.length} prêts)
+                      </span>
+                    </div>
+                  )}
                 </div>
 
-                {/* Bottom Player and "Exporter au format" Bar */}
-                <div className="pt-3 border-t border-white/5 flex flex-wrap items-center justify-between gap-3">
-                  {/* Play Button */}
+                {/* Bottom Action Bar */}
+                <div className="pt-3 border-t border-white/5 flex flex-wrap items-center justify-between gap-2">
+                  {/* Left: Open in Editor to resume work */}
                   <button
-                    onClick={() => handlePlayToggle(item)}
-                    disabled={isLoading}
-                    className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold shadow transition-all active:scale-95 cursor-pointer ${
-                      isItemPlaying
-                        ? 'bg-red-600 hover:bg-red-500 text-white'
-                        : 'bg-purple-600 hover:bg-purple-500 text-white'
-                    }`}
+                    type="button"
+                    onClick={() =>
+                      onOpenInEditor({
+                        id: item.id,
+                        name: item.name,
+                        text: item.text,
+                        voiceName: item.voiceName,
+                        speed: item.speed,
+                        pitch: item.pitch,
+                        style: item.style,
+                        segments: item.segments,
+                      })
+                    }
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-200 text-xs font-bold transition-all cursor-pointer shadow-sm"
+                    title="Reprendre le travail sur ce projet dans le studio de synthèse vocale"
                   >
-                    {isLoading ? (
-                      <>
-                        <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                        Chargement...
-                      </>
-                    ) : isItemPlaying ? (
-                      <>
-                        <Pause className="w-3.5 h-3.5 fill-current" />
-                        Pause
-                      </>
-                    ) : (
-                      <>
-                        <Play className="w-3.5 h-3.5 fill-current" />
-                        Écouter
-                      </>
-                    )}
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Reprendre le projet</span>
                   </button>
 
-                  {/* Actions & "Exporter au format" dropdown */}
+                  {/* Right: Audio playback & exports (if audio generated) */}
                   <div className="flex items-center gap-2">
-                    {/* Open in TTS Editor */}
-                    <button
-                      onClick={() => onOpenInEditor(item)}
-                      className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
-                      title="Ouvrir le texte dans l'éditeur de synthèse vocale"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                    </button>
-
-                    {/* Prominent "Exporter au format" Button with Dropdown for MP3, WAV or OGG */}
-                    <div className="relative">
+                    {/* Audio Play button if audio is ready */}
+                    {hasAudio && (
                       <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenDropdownId(isMenuOpen ? null : item.id);
-                        }}
-                        disabled={isItemExporting}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-white/5 hover:bg-white/10 border border-purple-500/30 text-purple-200 hover:text-white transition-all cursor-pointer disabled:opacity-50"
-                        title="Choisir le format d'exportation : MP3, WAV ou OGG"
+                        type="button"
+                        onClick={() => handlePlayToggle(item)}
+                        disabled={isLoading}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold shadow transition-all active:scale-95 cursor-pointer ${
+                          isItemPlaying
+                            ? 'bg-red-600 hover:bg-red-500 text-white'
+                            : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                        }`}
                       >
-                        {isItemExporting ? (
+                        {isLoading ? (
                           <>
-                            <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                            <span>Export {exportingState?.format.toUpperCase()}...</span>
+                            <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            <span>Chargement...</span>
                           </>
-                        ) : downloadSuccessNotice?.startsWith(item.id) ? (
+                        ) : isItemPlaying ? (
                           <>
-                            <Check className="w-3 h-3 text-emerald-400" />
-                            <span>Exporté !</span>
+                            <Pause className="w-3.5 h-3.5 fill-current" />
+                            <span>Pause</span>
                           </>
                         ) : (
                           <>
-                            <Download className="w-3.5 h-3.5 text-purple-400" />
-                            <span>Exporter au format</span>
-                            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isMenuOpen ? 'rotate-180' : ''}`} />
+                            <Play className="w-3.5 h-3.5 fill-current" />
+                            <span>Écouter</span>
                           </>
                         )}
                       </button>
+                    )}
 
-                      {/* Dropdown Menu */}
-                      {isMenuOpen && (
-                        <div
-                          onClick={(e) => e.stopPropagation()}
-                          className="absolute right-0 bottom-full mb-2 w-56 bg-[#131627] border border-purple-500/30 rounded-2xl p-1.5 shadow-2xl z-50 animate-in fade-in zoom-in-95"
+                    {/* Download individual segments button */}
+                    {item.segments && item.segments.some((s: any) => Boolean(s.audioBase64)) && (
+                      <button
+                        type="button"
+                        onClick={(e) => handleDownloadProjectSegments(item, e)}
+                        className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-cyan-300 transition-colors cursor-pointer"
+                        title="Télécharger tous les segments de ce projet (.wav)"
+                      >
+                        <Layers className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+
+                    {/* Exporter au format (MP3, WAV, OGG) */}
+                    {hasAudio && (
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenDropdownId(isMenuOpen ? null : item.id);
+                          }}
+                          disabled={isItemExporting}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-white/5 hover:bg-white/10 border border-purple-500/30 text-purple-200 hover:text-white transition-all cursor-pointer disabled:opacity-50"
+                          title="Choisir le format d'exportation : MP3, WAV ou OGG"
                         >
-                          <div className="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400 border-b border-white/5">
-                            Choisir le format d'export
+                          {isItemExporting ? (
+                            <>
+                              <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                              <span>{exportingState?.format.toUpperCase()}...</span>
+                            </>
+                          ) : downloadSuccessNotice?.startsWith(item.id) ? (
+                            <>
+                              <Check className="w-3 h-3 text-emerald-400" />
+                              <span>Exporté !</span>
+                            </>
+                          ) : (
+                            <>
+                              <Download className="w-3.5 h-3.5 text-purple-400" />
+                              <span>Exporter</span>
+                              <ChevronDown className={`w-3 h-3 transition-transform ${isMenuOpen ? 'rotate-180' : ''}`} />
+                            </>
+                          )}
+                        </button>
+
+                        {/* Dropdown Menu */}
+                        {isMenuOpen && (
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            className="absolute right-0 bottom-full mb-2 w-52 bg-[#131627] border border-purple-500/30 rounded-2xl p-1.5 shadow-2xl z-50 animate-in fade-in zoom-in-95"
+                          >
+                            <div className="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400 border-b border-white/5">
+                              Format de fichier
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={(e) => handleExportFormat(item, 'mp3', e)}
+                              className="w-full flex items-center justify-between p-2 rounded-xl text-xs text-left hover:bg-purple-600/20 text-gray-200 hover:text-white transition-colors cursor-pointer"
+                            >
+                              <div className="flex items-center gap-2">
+                                <Music className="w-4 h-4 text-purple-400" />
+                                <div>
+                                  <span className="font-bold block">MP3</span>
+                                  <span className="text-[10px] text-gray-400">192 kbps • CapCut, TikTok</span>
+                                </div>
+                              </div>
+                              <Download className="w-3.5 h-3.5 text-gray-500" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={(e) => handleExportFormat(item, 'wav', e)}
+                              className="w-full flex items-center justify-between p-2 rounded-xl text-xs text-left hover:bg-purple-600/20 text-gray-200 hover:text-white transition-colors cursor-pointer"
+                            >
+                              <div className="flex items-center gap-2">
+                                <FileAudio className="w-4 h-4 text-cyan-400" />
+                                <div>
+                                  <span className="font-bold block">WAV</span>
+                                  <span className="text-[10px] text-gray-400">24 kHz • Master Studio</span>
+                                </div>
+                              </div>
+                              <Download className="w-3.5 h-3.5 text-gray-500" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={(e) => handleExportFormat(item, 'ogg', e)}
+                              className="w-full flex items-center justify-between p-2 rounded-xl text-xs text-left hover:bg-purple-600/20 text-gray-200 hover:text-white transition-colors cursor-pointer"
+                            >
+                              <div className="flex items-center gap-2">
+                                <Sparkles className="w-4 h-4 text-emerald-400" />
+                                <div>
+                                  <span className="font-bold block">OGG</span>
+                                  <span className="text-[10px] text-gray-400">Vorbis • Web & Podcasts</span>
+                                </div>
+                              </div>
+                              <Download className="w-3.5 h-3.5 text-gray-500" />
+                            </button>
                           </div>
-
-                          {/* MP3 */}
-                          <button
-                            onClick={(e) => handleExportFormat(item, 'mp3', e)}
-                            className="w-full flex items-center justify-between p-2 rounded-xl text-xs text-left hover:bg-purple-600/20 text-gray-200 hover:text-white transition-colors cursor-pointer"
-                          >
-                            <div className="flex items-center gap-2">
-                              <Music className="w-4 h-4 text-purple-400" />
-                              <div>
-                                <span className="font-bold block">MP3</span>
-                                <span className="text-[10px] text-gray-400">192 kbps • CapCut, TikTok, Réseaux</span>
-                              </div>
-                            </div>
-                            <Download className="w-3.5 h-3.5 text-gray-500" />
-                          </button>
-
-                          {/* WAV */}
-                          <button
-                            onClick={(e) => handleExportFormat(item, 'wav', e)}
-                            className="w-full flex items-center justify-between p-2 rounded-xl text-xs text-left hover:bg-purple-600/20 text-gray-200 hover:text-white transition-colors cursor-pointer"
-                          >
-                            <div className="flex items-center gap-2">
-                              <FileAudio className="w-4 h-4 text-cyan-400" />
-                              <div>
-                                <span className="font-bold block">WAV</span>
-                                <span className="text-[10px] text-gray-400">24 kHz • Master HD Studio</span>
-                              </div>
-                            </div>
-                            <Download className="w-3.5 h-3.5 text-gray-500" />
-                          </button>
-
-                          {/* OGG */}
-                          <button
-                            onClick={(e) => handleExportFormat(item, 'ogg', e)}
-                            className="w-full flex items-center justify-between p-2 rounded-xl text-xs text-left hover:bg-purple-600/20 text-gray-200 hover:text-white transition-colors cursor-pointer"
-                          >
-                            <div className="flex items-center gap-2">
-                              <Sparkles className="w-4 h-4 text-emerald-400" />
-                              <div>
-                                <span className="font-bold block">OGG</span>
-                                <span className="text-[10px] text-gray-400">Vorbis/Opus • Web & Podcasts</span>
-                              </div>
-                            </div>
-                            <Download className="w-3.5 h-3.5 text-gray-500" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

@@ -149,4 +149,33 @@ En tournant la première page, une carte dessinée à l'encre dorée sembla s'il
 Les obstacles ne sont pas des barrières, ils sont l'entraînement qui forge votre caractère. Ne laissez personne dicter vos limites.
 Le succès n'appartient pas aux spectateurs, il appartient à ceux qui osent passer à l'action avec audace et persévérance.`,
   },
+  // BENCHMARK SCRIPTS POUR VALIDATION DES TEXTES LONGS
+  benchmark_30s: {
+    title: 'Test Benchmark ~30 secondes (70 mots)',
+    preset: 'commercial',
+    text: `Bienvenue dans Marius Voice AI. Cette courte démonstration d'environ trente secondes vous permet de valider instantanément la clarté et l'expressivité de nos timbres vocaux haute définition. Grâce aux modèles de pointe de Google Gemini, chaque syllabe est articulée avec une prosodie naturelle et un rythme fluide. Profitez d'une qualité audio professionnelle sans compromis pour toutes vos productions multimédias.`,
+  },
+  benchmark_1min: {
+    title: 'Test Benchmark ~1 minute (140 mots)',
+    preset: 'documentary',
+    text: `Au cœur des grandes métropoles modernes, le flux constant des activités humaines témoigne d'une transformation technologique sans précédent. De l'aube jusqu'au crépuscule, des millions d'idées circulent, se croisent et donnent naissance aux innovations qui façonneront les décennies à venir.
+
+La synthèse vocale intelligente s'impose désormais comme un pilier fondamental de cette révolution numérique. Elle permet de redonner vie aux récits, d'humaniser les interfaces et d'offrir une accessibilité universelle au savoir.
+
+Dans ce paysage en perpétuelle mutation, la maîtrise de la voix numérique devient un atout décisif. Chaque intonation, chaque nuance phonétique et chaque pause maîtrisée participent à créer un lien d'émotion durable avec l'auditeur. C'est précisément cette exigence de naturel et de fidélité acoustique que nous cultivons au sein de Marius Voice AI pour sublimer chacun de vos projets.`,
+  },
+  benchmark_3min08s: {
+    title: 'Test Benchmark ~3 min 08s (440 mots - Multi-segments)',
+    preset: 'storytelling',
+    text: `Il existe des voyages qui ne se mesurent pas en kilomètres parcourus, mais en émotions ressenties et en mystères dévoilés. Lorsque les premiers marins s'aventurèrent par-delà les caps brumeux de l'Atlantique Nord, ils ne cherchaient pas seulement de nouveaux rivages, mais une communion intime avec l'inconnu. Leurs navires en chêne massif affrontaient les vagues tumultueuses avec une vaillance tranquille, guidés par la seule lueur d'une étoile polaire immuable.
+
+Au fil des jours et des nuits sans sommeil, le vent sifflait dans les gréements comme un chant oublié d'anciennes civilisations. Chaque crépuscule offrait le spectacle grandiose d'un horizon infini où la mer semblait s'embraser sous les teintes dorées et pourpres du soleil couchant. Les hommes apprenaient à écouter le moindre frémissement de l'eau, à interpréter le vol gracieux des albatros et à faire confiance aux murmures du vent d'est.
+
+Cette quête d'exploration résonne encore profondément en chacun de nous aujourd'hui. À travers les siècles, la curiosité humaine est restée cette flamme vive qui refuse de s'éteindre. Qu'il s'agisse de sonder les profondeurs abyssales des océans, d'explorer les confins silencieux de notre système solaire ou de repousser les frontières de l'intelligence artificielle, l'esprit d'aventure demeure le véritable moteur de notre évolution.
+
+La voix humaine, quant à elle, a toujours été le véhicule privilégié de cette transmission universelle. Depuis les veillées autour des feux de camp primitifs jusqu'aux podcasts et livres audio contemporains, raconter une histoire, c'est créer un pont d'empathie par-delà le temps et l'espace. Les technologies modernes de synthèse neuronale ne remplacent pas cette sensibilité humaine : elles lui offrent un nouvel instrument d'expression, capable de porter les idées les plus nobles avec une fidélité acoustique remarquable.
+
+Alors que notre périple touche à sa fin et que les contours familiers du port se dessinent dans la brume matinale, le voyageur comprend que le trésor n'était pas la destination lointaine, mais bien le chemin parcouru et les vérités intérieures découvertes en chemin. Que cette traversée vous inspire à poursuivre vos propres rêves avec audace et sérénité.`,
+  },
 };
+

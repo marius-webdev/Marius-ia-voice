@@ -100,6 +100,24 @@ export interface SavedCreation {
   hasAudio?: boolean;
 }
 
+export interface SavedProject {
+  id: string;
+  name: string;
+  text: string;
+  voiceName: string;
+  customVoiceId?: string | null;
+  speed: number;
+  pitch: 'deep' | 'normal' | 'high';
+  style: string;
+  presetId?: string;
+  createdAt: string;
+  updatedAt: string;
+  duration?: number;
+  segmentCount?: number;
+  audioWavBase64?: string;
+  segments?: GenerationSegment[];
+}
+
 export interface UserStats {
   totalGenerations: number;
   totalCharacters: number;

@@ -23,6 +23,11 @@ export default function App() {
   // Cross-tab editor state (allows passing project/voice from other tabs)
   const [editorText, setEditorText] = useState<string>('');
   const [editorVoiceId, setEditorVoiceId] = useState<string>('Kore');
+  const [editorProjectName, setEditorProjectName] = useState<string>('Projet Vocal Marius');
+  const [editorSpeed, setEditorSpeed] = useState<number>(1.0);
+  const [editorPitch, setEditorPitch] = useState<'deep' | 'normal' | 'high'>('normal');
+  const [editorStyle, setEditorStyle] = useState<string>('');
+  const [editorSegments, setEditorSegments] = useState<any[]>([]);
 
   // Persistent user stats
   const [userStats, setUserStats] = useState<UserStats>(() => {
@@ -123,9 +128,30 @@ export default function App() {
     setCreations((prev) => prev.filter((c) => c.id !== id));
   };
 
-  const handleOpenCreationInEditor = (creation: SavedCreation) => {
-    setEditorText(creation.text);
-    setEditorVoiceId(creation.voiceName);
+  const handleOpenCreationInEditor = (item: {
+    id?: string;
+    name?: string;
+    text: string;
+    voiceName: string;
+    speed?: number;
+    pitch?: 'deep' | 'normal' | 'high';
+    style?: string;
+    segments?: any[];
+  }) => {
+    setEditorText(item.text);
+    setEditorVoiceId(item.voiceName);
+    if (item.name) setEditorProjectName(item.name);
+    if (item.speed) setEditorSpeed(item.speed);
+    if (item.pitch) setEditorPitch(item.pitch);
+    if (item.style) setEditorStyle(item.style);
+    if (item.segments) setEditorSegments(item.segments);
+    setActiveTab('tts');
+  };
+
+  const handleStartNewProject = () => {
+    setEditorText('');
+    setEditorProjectName('Nouveau Projet Vocal');
+    setEditorSegments([]);
     setActiveTab('tts');
   };
 
@@ -169,10 +195,16 @@ export default function App() {
                 customVoices={customVoices}
                 initialText={editorText}
                 initialVoiceId={editorVoiceId}
+                initialProjectName={editorProjectName}
+                initialSpeed={editorSpeed}
+                initialPitch={editorPitch}
+                initialStyle={editorStyle}
+                initialSegments={editorSegments}
                 onGenerationComplete={handleCreationComplete}
                 onNavigateToMyVoice={() => setActiveTab('my-voice')}
                 onNavigateToApiKey={() => setActiveTab('api-key')}
                 onNavigateToQuotas={() => setActiveTab('quotas')}
+                onNavigateToProjects={() => setActiveTab('creations')}
               />
             )}
 
@@ -190,6 +222,7 @@ export default function App() {
                 creations={creations}
                 onDeleteSuccess={handleCreationDeleted}
                 onOpenInEditor={handleOpenCreationInEditor}
+                onNewProject={handleStartNewProject}
               />
             )}
 

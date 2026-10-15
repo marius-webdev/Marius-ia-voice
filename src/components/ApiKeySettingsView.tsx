@@ -39,6 +39,9 @@ export const ApiKeySettingsView: React.FC<ApiKeySettingsViewProps> = ({
   const [maskedKey, setMaskedKey] = useState(() => apiKeyManager.getMaskedKey());
   const [isEditingNewKey, setIsEditingNewKey] = useState(!apiKeyManager.hasKey());
 
+  // Storage mode: persistent (localStorage) or session (sessionStorage)
+  const [storageMode, setStorageMode] = useState<'local' | 'session'>(() => apiKeyManager.getStorageMode());
+
   // Test state
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{
@@ -53,6 +56,7 @@ export const ApiKeySettingsView: React.FC<ApiKeySettingsViewProps> = ({
   useEffect(() => {
     setIsSaved(apiKeyManager.hasKey());
     setMaskedKey(apiKeyManager.getMaskedKey());
+    setStorageMode(apiKeyManager.getStorageMode());
   }, []);
 
   const handleTestKey = async () => {
@@ -96,14 +100,16 @@ export const ApiKeySettingsView: React.FC<ApiKeySettingsViewProps> = ({
       return;
     }
 
-    apiKeyManager.saveApiKey(cleanKey);
+    apiKeyManager.saveApiKey(cleanKey, storageMode);
     setIsSaved(true);
     setMaskedKey(apiKeyManager.getMaskedKey());
     setApiKeyInput('');
     setIsEditingNewKey(false);
     setTestResult({
       success: true,
-      message: 'Votre clé API a été enregistrée avec succès en session sécurisée.',
+      message: storageMode === 'local'
+        ? 'Votre clé API a été enregistrée avec succès de manière persistante (disponible après rafraîchissement).'
+        : 'Votre clé API a été enregistrée pour cette session temporaire uniquement.',
     });
     if (onKeyConfigured) onKeyConfigured();
   };
@@ -208,11 +214,19 @@ export const ApiKeySettingsView: React.FC<ApiKeySettingsViewProps> = ({
                 <span className="font-mono text-sm sm:text-base text-purple-200 tracking-wider">
                   {maskedKey || 'AIzaSy••••••••••••••••••••••••'}
                 </span>
-                <span className="text-[11px] text-gray-500 flex items-center gap-1">
+                <span className="text-[11px] text-gray-400 flex items-center gap-1.5 bg-white/5 px-2.5 py-1 rounded-lg border border-white/10">
                   <Lock className="w-3 h-3 text-emerald-400" />
-                  Session active
+                  {storageMode === 'local' ? 'Stockage persistant (localStorage)' : 'Session temporaire (sessionStorage)'}
                 </span>
               </div>
+            </div>
+
+            {/* Storage notice */}
+            <div className="p-3 rounded-xl bg-purple-950/20 border border-purple-500/20 text-xs text-gray-300">
+              <span className="font-semibold text-purple-300">Persistance active : </span>
+              {storageMode === 'local'
+                ? 'Votre clé est conservée dans votre navigateur et reste disponible après un rafraîchissement ou la réouverture de la page.'
+                : 'Votre clé est en mode session temporaire : elle sera effacée dès la fermeture de votre onglet ou navigateur.'}
             </div>
 
             <div className="flex flex-wrap items-center gap-3 pt-2">
@@ -270,9 +284,60 @@ export const ApiKeySettingsView: React.FC<ApiKeySettingsViewProps> = ({
                   {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
-              <p className="text-[11px] text-gray-500 mt-2 flex items-center gap-1.5">
-                <Lock className="w-3 h-3 text-purple-400" />
-                Stockage sécurisé en session navigateur (sessionStorage). La clé n'est jamais enregistrée en texte clair de manière permanente ni partagée.
+            </div>
+
+            {/* Storage Mode Selector */}
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-gray-300">
+                Mode de conservation dans votre navigateur :
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setStorageMode('local')}
+                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                    storageMode === 'local'
+                      ? 'bg-purple-600/20 border-purple-500 text-white ring-1 ring-purple-500'
+                      : 'bg-[#090b14] border-white/10 text-gray-400 hover:border-white/20'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-bold text-xs text-purple-300">Persistant (Recommandé)</span>
+                    {storageMode === 'local' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                  </div>
+                  <p className="text-[11px] text-gray-400 leading-snug">
+                    Reste disponible après un rafraîchissement ou la fermeture du navigateur sur cet appareil.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setStorageMode('session')}
+                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                    storageMode === 'session'
+                      ? 'bg-purple-600/20 border-purple-500 text-white ring-1 ring-purple-500'
+                      : 'bg-[#090b14] border-white/10 text-gray-400 hover:border-white/20'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-bold text-xs text-purple-300">Session temporaire</span>
+                    {storageMode === 'session' && <Check className="w-3.5 h-3.5 text-purple-400" />}
+                  </div>
+                  <p className="text-[11px] text-gray-400 leading-snug">
+                    Effacée dès la fermeture de l'onglet ou du navigateur (idéal pour ordinateurs partagés).
+                  </p>
+                </button>
+              </div>
+            </div>
+
+            {/* Security Warning Notice */}
+            <div className="p-3.5 rounded-xl bg-amber-950/20 border border-amber-500/20 text-xs text-amber-200/90 space-y-1">
+              <div className="flex items-center gap-2 font-semibold text-amber-300">
+                <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>Avertissement & Sécurité des données :</span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-gray-300">
+                Votre clé est stockée localement dans votre navigateur web via {storageMode === 'local' ? 'localStorage' : 'sessionStorage'}. Aucune clé secrète développeur n'est utilisée. Votre clé est transmise uniquement aux routes d'API de votre propre studio pour authentifier vos requêtes auprès de Google Gemini. Vider l'historique ou le cache de votre navigateur effacera la clé stockée.
               </p>
             </div>
 

@@ -110,7 +110,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               }`}
             >
               <Library className="w-3.5 h-3.5" />
-              Créations
+              Projets
               {creationsCount > 0 && (
                 <span className="ml-1 text-[10px] bg-white/10 text-gray-200 px-1.5 py-0.2 rounded-full font-bold">
                   {creationsCount}

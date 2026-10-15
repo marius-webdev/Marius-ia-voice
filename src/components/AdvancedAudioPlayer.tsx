@@ -206,6 +206,25 @@ export const AdvancedAudioPlayer: React.FC<AdvancedAudioPlayerProps> = ({
     }
   };
 
+  const downloadSingleSegment = (seg: GenerationSegment) => {
+    if (!seg.audioBase64) return;
+    const link = document.createElement('a');
+    link.href = `data:audio/wav;base64,${seg.audioBase64}`;
+    const sanitized = projectName.toLowerCase().replace(/[^a-z0-9_-]/g, '-') || 'projet';
+    link.download = `marius-${sanitized}-segment-${seg.index}.wav`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const downloadAllSegments = async () => {
+    const readySegments = segments.filter((s) => Boolean(s.audioBase64));
+    for (let i = 0; i < readySegments.length; i++) {
+      downloadSingleSegment(readySegments[i]);
+      await new Promise((r) => setTimeout(r, 350));
+    }
+  };
+
   if (!audioSrc) {
     return null;
   }
@@ -474,16 +493,31 @@ export const AdvancedAudioPlayer: React.FC<AdvancedAudioPlayerProps> = ({
       {/* Segments Drawer */}
       {showSegments && segments.length > 0 && (
         <div className="mt-4 pt-4 border-t border-white/5">
-          <div className="flex items-center justify-between mb-3">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-              Découpage en {segments.length} segments continus
-            </h4>
-            <span className="text-[11px] text-gray-400">
-              Chaque segment est assemblé sans coupure dans le fichier master
-            </span>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <div>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                Découpage en {segments.length} segments continus
+              </h4>
+              <span className="text-[11px] text-gray-400">
+                Chaque segment est assemblé sans coupure dans le fichier master
+              </span>
+            </div>
+
+            {/* Bulk download all segments button */}
+            {segments.some((s) => Boolean(s.audioBase64)) && (
+              <button
+                type="button"
+                onClick={downloadAllSegments}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 text-xs font-bold transition-all cursor-pointer shadow-sm"
+                title="Télécharger chaque segment individuel au format WAV"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Télécharger tous les segments (.wav)</span>
+              </button>
+            )}
           </div>
 
-          <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+          <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
             {segments.map((seg) => (
               <div
                 key={seg.index}
@@ -507,18 +541,30 @@ export const AdvancedAudioPlayer: React.FC<AdvancedAudioPlayerProps> = ({
                     </span>
                   )}
                   {seg.audioBase64 ? (
-                    <button
-                      onClick={() => playSegment(seg)}
-                      className="p-1.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 transition-colors"
-                      title="Écouter ce segment uniquement"
-                    >
-                      <Play className="w-3 h-3 fill-current" />
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => playSegment(seg)}
+                        className="p-1.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 transition-colors cursor-pointer"
+                        title="Écouter ce segment individuel"
+                      >
+                        <Play className="w-3 h-3 fill-current" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => downloadSingleSegment(seg)}
+                        className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-cyan-300 transition-colors cursor-pointer"
+                        title={`Télécharger le segment #${seg.index} (WAV)`}
+                      >
+                        <Download className="w-3 h-3" />
+                      </button>
+                    </>
                   ) : (
                     onSegmentRetry && (
                       <button
+                        type="button"
                         onClick={() => onSegmentRetry(seg.index)}
-                        className="text-[10px] text-red-400 hover:text-red-300 underline"
+                        className="text-[10px] text-red-400 hover:text-red-300 underline font-semibold cursor-pointer"
                       >
                         Réessayer
                       </button>

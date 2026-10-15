@@ -30,18 +30,28 @@ import {
   Pause,
   RefreshCw,
   Info,
+  Download,
+  Save,
+  FilePlus,
+  Check,
 } from 'lucide-react';
 import { CustomVoiceProfile, GenerationSegment, Voice } from '../types.ts';
 import { VOICE_PRESETS, SAMPLE_SCRIPTS } from '../constants/presets.ts';
 import { AdvancedAudioPlayer } from './AdvancedAudioPlayer.tsx';
 import { concatenateAudioSegments, generateSingleSegment, splitScriptSegments } from '../services/api.ts';
 import { apiKeyManager } from '../services/apiKeyManager.ts';
+import { projectManager } from '../services/projectManager.ts';
 
 interface TextToSpeechWorkspaceProps {
   voices: Voice[];
   customVoices: CustomVoiceProfile[];
   initialText?: string;
   initialVoiceId?: string;
+  initialProjectName?: string;
+  initialSpeed?: number;
+  initialPitch?: 'deep' | 'normal' | 'high';
+  initialStyle?: string;
+  initialSegments?: GenerationSegment[];
   onGenerationComplete: (data: {
     creationId: string;
     text: string;
@@ -51,6 +61,7 @@ interface TextToSpeechWorkspaceProps {
   onNavigateToMyVoice: () => void;
   onNavigateToApiKey?: () => void;
   onNavigateToQuotas?: () => void;
+  onNavigateToProjects?: () => void;
 }
 
 export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
@@ -58,27 +69,37 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
   customVoices,
   initialText = '',
   initialVoiceId = 'Kore',
+  initialProjectName = 'Projet Vocal Marius',
+  initialSpeed = 1.0,
+  initialPitch = 'normal',
+  initialStyle = '',
+  initialSegments,
   onGenerationComplete,
   onNavigateToMyVoice,
   onNavigateToApiKey,
   onNavigateToQuotas,
+  onNavigateToProjects,
 }) => {
+  // Project ID & state
+  const [projectId, setProjectId] = useState<string>(() => `proj_${Date.now()}`);
+  const [saveSuccessNotice, setSaveSuccessNotice] = useState<string | null>(null);
+
   // Script state
   const [scriptText, setScriptText] = useState(() => {
     return initialText || localStorage.getItem('marius_tts_draft') || SAMPLE_SCRIPTS.commercial.text;
   });
-  const [projectName, setProjectName] = useState('Projet Vocal Marius');
+  const [projectName, setProjectName] = useState(initialProjectName);
 
   // Selected Voice
   const [voiceCategory, setVoiceCategory] = useState<'studio' | 'custom'>('studio');
   const [selectedVoiceId, setSelectedVoiceId] = useState(initialVoiceId);
 
   // Settings
-  const [speechSpeed, setSpeechSpeed] = useState(1.0);
-  const [voicePitch, setVoicePitch] = useState<'deep' | 'normal' | 'high'>('normal');
+  const [speechSpeed, setSpeechSpeed] = useState(initialSpeed);
+  const [voicePitch, setVoicePitch] = useState<'deep' | 'normal' | 'high'>(initialPitch);
   const [selectedPresetId, setSelectedPresetId] = useState<string>('commercial');
   const [customStyle, setCustomStyle] = useState(
-    VOICE_PRESETS.find((p) => p.id === 'commercial')?.stylePrompt || ''
+    initialStyle || VOICE_PRESETS.find((p) => p.id === 'commercial')?.stylePrompt || ''
   );
 
   // Generation status
@@ -247,6 +268,7 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
   const [retryInfo, setRetryInfo] = useState<{ attempt: number; maxAttempts: number; countdown: number } | null>(null);
   const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState<string>('');
   const [isPaused, setIsPaused] = useState(false);
+  const [segmentsViewMode, setSegmentsViewMode] = useState<'detailed' | 'compact'>('detailed');
   const abortRequestedRef = useRef(false);
 
   // Stop / Cancel Generation Handler
@@ -256,6 +278,91 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
     setIsPaused(true);
     setRetryInfo(null);
     setGenerationStep('Génération mise en pause. Vos segments déjà synthétisés sont conservés.');
+  };
+
+  // Project persistence handlers (Phase 2)
+  const handleSaveProject = () => {
+    projectManager.saveProject({
+      id: projectId,
+      name: projectName,
+      text: scriptText,
+      voiceName: selectedVoiceId,
+      customVoiceId: voiceCategory === 'custom' ? selectedVoiceId : null,
+      speed: speechSpeed,
+      pitch: voicePitch,
+      style: customStyle,
+      presetId: selectedPresetId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      duration: generatedDuration,
+      segmentCount: segments.length,
+      audioWavBase64: generatedWav || undefined,
+      segments: segments.length > 0 ? segments : undefined,
+    });
+    setSaveSuccessNotice('Projet enregistré avec succès dans votre navigateur !');
+    setTimeout(() => setSaveSuccessNotice(null), 3000);
+  };
+
+  const handleNewProject = () => {
+    if (scriptText.trim() && scriptText !== SAMPLE_SCRIPTS.commercial.text) {
+      if (!window.confirm('Créer un nouveau projet ? Les modifications non enregistrées seront réinitialisées.')) {
+        return;
+      }
+    }
+    const newId = `proj_${Date.now()}`;
+    setProjectId(newId);
+    setProjectName('Nouveau Projet Vocal');
+    setScriptText('');
+    setSegments([]);
+    setGeneratedSegments([]);
+    setGeneratedWav(null);
+    setGeneratedMp3(null);
+    setGeneratedDuration(0);
+    setErrorNotice(null);
+    try {
+      localStorage.removeItem('marius_active_tts_job');
+      localStorage.removeItem('marius_tts_draft');
+    } catch {}
+  };
+
+  // Benchmark loaders (Phase 5)
+  const handleLoadBenchmark = (key: 'benchmark_30s' | 'benchmark_1min' | 'benchmark_3min08s') => {
+    const sample = SAMPLE_SCRIPTS[key];
+    if (!sample) return;
+    setScriptText(sample.text);
+    setProjectName(sample.title);
+    applyPreset(sample.preset);
+    setSegments([]);
+    setGeneratedSegments([]);
+    setGeneratedWav(null);
+    setGeneratedDuration(0);
+  };
+
+  // Single and bulk segment downloading (Phase 4)
+  const downloadSingleSegment = (seg: GenerationSegment) => {
+    if (!seg.audioBase64) return;
+    const link = document.createElement('a');
+    link.href = `data:audio/wav;base64,${seg.audioBase64}`;
+    const sanitized = projectName.toLowerCase().replace(/[^a-z0-9_-]/g, '-') || 'projet';
+    link.download = `marius-${sanitized}-segment-${seg.index}.wav`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const downloadAllSegments = async () => {
+    const readySegments = segments.filter((s) => Boolean(s.audioBase64));
+    for (let i = 0; i < readySegments.length; i++) {
+      downloadSingleSegment(readySegments[i]);
+      await new Promise((r) => setTimeout(r, 350));
+    }
+  };
+
+  // Audio preview for single segment
+  const playSingleSegment = (seg: GenerationSegment) => {
+    if (!seg.audioBase64) return;
+    const audio = new Audio(`data:audio/wav;base64,${seg.audioBase64}`);
+    audio.play().catch((e) => console.error(e));
   };
 
   // Main Generation Handler supporting Resume and controlled asynchronous queue
@@ -649,30 +756,96 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
             />
           </div>
 
-          {/* Quick Actions */}
-          <div className="flex items-center gap-1.5 flex-wrap">
+          {/* Project & Quick Actions */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Save Project Button */}
             <button
+              type="button"
+              onClick={handleSaveProject}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600/30 hover:bg-purple-600/40 border border-purple-500/40 text-xs text-purple-200 font-bold transition-all cursor-pointer shadow-sm"
+              title="Enregistrer ce projet (texte, voix, paramètres, segments) dans votre navigateur"
+            >
+              <Save className="w-3.5 h-3.5 text-purple-300" />
+              <span>Enregistrer le projet</span>
+            </button>
+
+            {/* New Project Button */}
+            <button
+              type="button"
+              onClick={handleNewProject}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-gray-300 transition-colors cursor-pointer"
+              title="Créer un nouveau projet vierge"
+            >
+              <FilePlus className="w-3.5 h-3.5 text-gray-400" />
+              <span className="hidden sm:inline">Nouveau</span>
+            </button>
+
+            <button
+              type="button"
               onClick={handlePaste}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-gray-300 transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-xs text-gray-300 transition-colors cursor-pointer"
               title="Coller depuis le presse-papier"
             >
               <ClipboardPaste className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Coller</span>
             </button>
 
-            <label className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-gray-300 transition-colors cursor-pointer">
+            <label className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-xs text-gray-300 transition-colors cursor-pointer">
               <Upload className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Importer .txt</span>
               <input type="file" accept=".txt" onChange={handleFileUpload} className="hidden" />
             </label>
 
             <button
+              type="button"
               onClick={() => setScriptText('')}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-red-500/20 text-xs text-gray-400 hover:text-red-300 transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white/5 hover:bg-red-500/20 text-xs text-gray-400 hover:text-red-300 transition-colors cursor-pointer"
               title="Effacer le texte"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Effacer</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Save confirmation toast banner */}
+        {saveSuccessNotice && (
+          <div className="mb-3 p-2.5 rounded-xl bg-emerald-950/50 border border-emerald-500/40 text-emerald-200 text-xs flex items-center gap-2 animate-in fade-in">
+            <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>{saveSuccessNotice}</span>
+          </div>
+        )}
+
+        {/* Benchmark Test Scripts Toolbar (Phase 5) */}
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3 p-2.5 bg-[#0a0c16] rounded-xl border border-purple-500/20 text-xs">
+          <div className="flex items-center gap-1.5 text-purple-300 font-semibold text-[11px]">
+            <Clock className="w-3.5 h-3.5 text-purple-400" />
+            <span>Tests de validation durée :</span>
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              type="button"
+              onClick={() => handleLoadBenchmark('benchmark_30s')}
+              className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-purple-600/20 hover:border-purple-500/40 border border-white/5 text-[11px] text-gray-300 hover:text-white transition-all cursor-pointer"
+              title="Charger le script de validation ~30 secondes (70 mots)"
+            >
+              ⏱️ ~30s (70 mots)
+            </button>
+            <button
+              type="button"
+              onClick={() => handleLoadBenchmark('benchmark_1min')}
+              className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-purple-600/20 hover:border-purple-500/40 border border-white/5 text-[11px] text-gray-300 hover:text-white transition-all cursor-pointer"
+              title="Charger le script de validation ~1 minute (140 mots)"
+            >
+              ⏱️ ~1 min (140 mots)
+            </button>
+            <button
+              type="button"
+              onClick={() => handleLoadBenchmark('benchmark_3min08s')}
+              className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-purple-900/40 to-indigo-900/40 hover:from-purple-800/60 hover:to-indigo-800/60 border border-purple-500/30 text-[11px] text-purple-200 font-bold transition-all cursor-pointer"
+              title="Charger le script de validation longue durée ~3 min 08s (440 mots en 6 segments)"
+            >
+              🚀 ~3 min 08s (440 mots)
             </button>
           </div>
         </div>
@@ -1275,49 +1448,207 @@ export const TextToSpeechWorkspace: React.FC<TextToSpeechWorkspaceProps> = ({
               />
             </div>
 
-            {/* Segment Chips Matrix */}
+            {/* Segment Controls & Action Bar */}
             <div className="pt-2">
-              <span className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold block mb-2">
-                File d'attente asynchrone des segments :
-              </span>
-              <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1">
-                {segments.map((seg) => (
-                  <div
-                    key={seg.index}
-                    className={`px-2.5 py-1 rounded-lg text-[10px] font-mono flex items-center gap-1.5 border transition-all ${
-                      seg.status === 'completed'
-                        ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
-                        : seg.status === 'generating'
-                        ? 'bg-purple-950/80 border-purple-400 text-purple-200 animate-pulse ring-1 ring-purple-400'
-                        : seg.status === 'failed'
-                        ? 'bg-red-950/60 border-red-500/40 text-red-300'
-                        : 'bg-white/5 border-white/5 text-gray-500'
-                    }`}
-                    title={seg.text}
-                  >
-                    <span>#{seg.index}</span>
-                    {seg.status === 'completed' && <CheckCircle2 className="w-3 h-3 text-emerald-400" />}
-                    {seg.status === 'generating' && <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-ping" />}
-                    {seg.status === 'failed' && <AlertCircle className="w-3 h-3 text-red-400" />}
-                    {seg.duration && (
-                      <span className="opacity-80">({seg.duration.toFixed(1)}s)</span>
-                    )}
-                    {seg.status === 'failed' && !isGenerating && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRetrySingleSegment(seg.index);
-                        }}
-                        className="ml-1 px-1.5 py-0.5 rounded bg-red-800/80 hover:bg-red-700 text-white text-[9px] font-sans font-bold cursor-pointer transition-colors"
-                        title="Réessayer ce segment individuellement"
-                      >
-                        Réessayer
-                      </button>
-                    )}
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5 pb-2 border-b border-white/5">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-gray-300">
+                    Segments de synthèse ({segments.filter((s) => s.status === 'completed').length}/{segments.length} terminés) :
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {/* View Mode Toggle */}
+                  <div className="flex items-center bg-[#090b14] rounded-lg p-0.5 border border-white/5 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setSegmentsViewMode('detailed')}
+                      className={`px-2 py-0.5 rounded transition-all cursor-pointer ${
+                        segmentsViewMode === 'detailed'
+                          ? 'bg-purple-600 text-white font-bold'
+                          : 'text-gray-400 hover:text-white'
+                      }`}
+                    >
+                      Détaillée
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSegmentsViewMode('compact')}
+                      className={`px-2 py-0.5 rounded transition-all cursor-pointer ${
+                        segmentsViewMode === 'compact'
+                          ? 'bg-purple-600 text-white font-bold'
+                          : 'text-gray-400 hover:text-white'
+                      }`}
+                    >
+                      Compacte
+                    </button>
                   </div>
-                ))}
+
+                  {/* Bulk download all segments button */}
+                  {segments.some((s) => Boolean(s.audioBase64)) && (
+                    <button
+                      type="button"
+                      onClick={downloadAllSegments}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 text-[11px] font-bold transition-all cursor-pointer"
+                      title="Télécharger tous les segments audio terminés (.wav)"
+                    >
+                      <Download className="w-3 h-3" />
+                      <span>Télécharger tous les segments</span>
+                    </button>
+                  )}
+                </div>
               </div>
+
+              {/* Detailed View */}
+              {segmentsViewMode === 'detailed' ? (
+                <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                  {segments.map((seg) => (
+                    <div
+                      key={seg.index}
+                      className={`p-3 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs transition-all ${
+                        seg.status === 'completed'
+                          ? 'bg-emerald-950/20 border-emerald-500/30'
+                          : seg.status === 'generating'
+                          ? 'bg-purple-950/40 border-purple-400 ring-1 ring-purple-400/50'
+                          : seg.status === 'failed'
+                          ? 'bg-red-950/30 border-red-500/40'
+                          : 'bg-[#090b14] border-white/5'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2.5 flex-1 min-w-0">
+                        <span className="font-mono px-2 py-1 rounded-lg bg-white/5 border border-white/10 text-[11px] text-purple-300 font-bold shrink-0">
+                          #{seg.index}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-gray-200 text-xs font-medium leading-relaxed">
+                            {seg.text}
+                          </p>
+                          {seg.error && (
+                            <p className="text-red-400 text-[11px] mt-1 flex items-center gap-1">
+                              <AlertCircle className="w-3 h-3 shrink-0" />
+                              <span>{seg.error}</span>
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                        {/* Status badge */}
+                        {seg.status === 'completed' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                            <span>Prêt</span>
+                            {seg.duration && <span className="opacity-80">({seg.duration.toFixed(1)}s)</span>}
+                          </span>
+                        )}
+                        {seg.status === 'generating' && (
+                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-purple-500/20 border border-purple-500/40 text-purple-200 animate-pulse">
+                            <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-ping" />
+                            <span>En cours...</span>
+                          </span>
+                        )}
+                        {seg.status === 'pending' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-white/5 border border-white/5 text-gray-400">
+                            <Clock className="w-3 h-3 text-gray-500" />
+                            <span>En attente</span>
+                          </span>
+                        )}
+                        {seg.status === 'failed' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-500/15 border border-red-500/30 text-red-300">
+                            <AlertCircle className="w-3 h-3 text-red-400" />
+                            <span>Échoué</span>
+                          </span>
+                        )}
+
+                        {/* Audio actions */}
+                        {seg.status === 'completed' && seg.audioBase64 && (
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => playSingleSegment(seg)}
+                              className="p-1.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 transition-colors cursor-pointer"
+                              title={`Écouter le segment #${seg.index}`}
+                            >
+                              <Play className="w-3.5 h-3.5 fill-current" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => downloadSingleSegment(seg)}
+                              className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-cyan-300 transition-colors cursor-pointer"
+                              title={`Télécharger le segment #${seg.index} (WAV)`}
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Retry action for failed segment */}
+                        {seg.status === 'failed' && !isGenerating && (
+                          <button
+                            type="button"
+                            onClick={() => handleRetrySingleSegment(seg.index)}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-800/80 hover:bg-red-700 text-white text-[11px] font-bold cursor-pointer transition-colors"
+                            title="Réessayer uniquement ce segment sans régénérer les autres"
+                          >
+                            <RefreshCw className="w-3 h-3" />
+                            <span>Réessayer</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                /* Compact Chips Matrix View */
+                <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1">
+                  {segments.map((seg) => (
+                    <div
+                      key={seg.index}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-mono flex items-center gap-1.5 border transition-all ${
+                        seg.status === 'completed'
+                          ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                          : seg.status === 'generating'
+                          ? 'bg-purple-950/80 border-purple-400 text-purple-200 animate-pulse ring-1 ring-purple-400'
+                          : seg.status === 'failed'
+                          ? 'bg-red-950/60 border-red-500/40 text-red-300'
+                          : 'bg-white/5 border-white/5 text-gray-500'
+                      }`}
+                      title={seg.text}
+                    >
+                      <span>#{seg.index}</span>
+                      {seg.status === 'completed' && <CheckCircle2 className="w-3 h-3 text-emerald-400" />}
+                      {seg.status === 'generating' && <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-ping" />}
+                      {seg.status === 'failed' && <AlertCircle className="w-3 h-3 text-red-400" />}
+                      {seg.duration && (
+                        <span className="opacity-80">({seg.duration.toFixed(1)}s)</span>
+                      )}
+                      {seg.status === 'completed' && seg.audioBase64 && (
+                        <button
+                          type="button"
+                          onClick={() => downloadSingleSegment(seg)}
+                          className="ml-1 p-0.5 rounded text-cyan-300 hover:text-white"
+                          title="Télécharger ce segment (.wav)"
+                        >
+                          <Download className="w-2.5 h-2.5" />
+                        </button>
+                      )}
+                      {seg.status === 'failed' && !isGenerating && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRetrySingleSegment(seg.index);
+                          }}
+                          className="ml-1 px-1.5 py-0.5 rounded bg-red-800/80 hover:bg-red-700 text-white text-[9px] font-sans font-bold cursor-pointer transition-colors"
+                          title="Réessayer ce segment individuellement"
+                        >
+                          Réessayer
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
